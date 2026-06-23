@@ -10,7 +10,7 @@ router.get('/', async (req, res) => {
     const { designerId, sort, limit } = req.query;
     let query = supabaseAdmin
       .from('designs')
-      .select('*')
+      .select('*, products:base_product_id(category), catalogue:catalogue_item_id(category)')
       .in('status', ['approved', 'active']);
 
     if (designerId) {

@@ -171,4 +171,31 @@ router.put('/:id', verifyAuth, verifyAdmin, async (req, res) => {
   }
 });
 
+// GET /api/designers/:id/admin-details - Detailed stats for master admin
+router.get('/:id/admin-details', verifyAuth, verifyAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Parallel queries
+    const [designerRes, walletRes, designsRes, ordersRes] = await Promise.all([
+      supabaseAdmin.from('designers').select('*').eq('id', id).single(),
+      supabaseAdmin.from('wallets').select('*').eq('id', id).maybeSingle(),
+      supabaseAdmin.from('designs').select('id, title, status, price, created_at').eq('designer_id', id),
+      supabaseAdmin.from('orders').select('*').eq('designer_id', id)
+    ]);
+
+    if (designerRes.error) throw designerRes.error;
+
+    res.json({
+      designer: designerRes.data,
+      wallet: walletRes.data || { balance: 0, total_spent: 0, total_earnings: 0, total_withdrawn: 0 },
+      designs: designsRes.data || [],
+      orders: ordersRes.data || []
+    });
+  } catch (err) {
+    console.error('Error fetching admin designer details:', err.message);
+    res.status(500).json({ error: 'Failed to fetch designer details' });
+  }
+});
+
 export default router;

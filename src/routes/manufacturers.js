@@ -125,4 +125,31 @@ router.put('/:id', verifyAuth, verifyAdmin, async (req, res) => {
   }
 });
 
+// GET /api/manufacturers/:id/admin-details - Detailed stats for master admin
+router.get('/:id/admin-details', verifyAuth, verifyAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Parallel queries
+    const [mfgRes, walletRes, productsRes, ordersRes] = await Promise.all([
+      supabaseAdmin.from('manufacturers').select('*').eq('id', id).single(),
+      supabaseAdmin.from('wallets').select('*').eq('id', id).maybeSingle(),
+      supabaseAdmin.from('products').select('id, name, base_price, status, created_at').eq('mfg_id', id),
+      supabaseAdmin.from('orders').select('*').eq('mfg_id', id)
+    ]);
+
+    if (mfgRes.error) throw mfgRes.error;
+
+    res.json({
+      manufacturer: mfgRes.data,
+      wallet: walletRes.data || { balance: 0, total_spent: 0, total_earnings: 0, total_withdrawn: 0 },
+      products: productsRes.data || [],
+      orders: ordersRes.data || []
+    });
+  } catch (err) {
+    console.error('Error fetching admin manufacturer details:', err.message);
+    res.status(500).json({ error: 'Failed to fetch manufacturer details' });
+  }
+});
+
 export default router;

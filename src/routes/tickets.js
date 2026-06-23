@@ -24,13 +24,45 @@ router.get('/', verifyAuth, async (req, res) => {
 // GET /api/tickets/all - Get all tickets (admin only)
 router.get('/all', verifyAuth, verifyAdmin, async (req, res) => {
   try {
-    const { data, error } = await supabaseAdmin
+    const { data: tickets, error } = await supabaseAdmin
       .from('tickets')
       .select('*')
       .order('updated_at', { ascending: false });
 
     if (error) throw error;
-    res.json(data || []);
+    if (!tickets || tickets.length === 0) {
+      return res.json([]);
+    }
+
+    const userIds = [...new Set(tickets.map(t => t.user_id))];
+
+    // Fetch profiles from all tables in parallel
+    const [usersRes, designersRes, mfgsRes] = await Promise.all([
+      supabaseAdmin.from('users').select('id, full_name, email').in('id', userIds),
+      supabaseAdmin.from('designers').select('id, username, full_name, email').in('id', userIds),
+      supabaseAdmin.from('manufacturers').select('id, business_name, email').in('id', userIds)
+    ]);
+
+    const profileMap = {};
+
+    usersRes.data?.forEach(u => {
+      profileMap[u.id] = { username: u.full_name, email: u.email, role: 'user' };
+    });
+
+    designersRes.data?.forEach(d => {
+      profileMap[d.id] = { username: d.username || d.full_name, email: d.email, role: 'designer' };
+    });
+
+    mfgsRes.data?.forEach(m => {
+      profileMap[m.id] = { username: m.business_name, email: m.email, role: 'mfg' };
+    });
+
+    const enrichedTickets = tickets.map(t => ({
+      ...t,
+      user_profile: profileMap[t.user_id] || { username: 'Unknown', email: 'Unknown', role: 'user' }
+    }));
+
+    res.json(enrichedTickets);
   } catch (err) {
     console.error('Error fetching all tickets:', err.message);
     res.status(500).json({ error: 'Failed to fetch all tickets' });
@@ -40,12 +72,29 @@ router.get('/all', verifyAuth, verifyAdmin, async (req, res) => {
 // POST /api/tickets - Create a new ticket (requires auth)
 router.post('/', verifyAuth, async (req, res) => {
   try {
-    const { subject, category, order_id } = req.body;
+    const { subject, category, order_id, description } = req.body;
     if (!subject) {
       return res.status(400).json({ error: 'Subject is required.' });
     }
 
-    const { data, error } = await supabaseAdmin
+    // Resolve user's role for the ticket message
+    let senderRole = 'user';
+    const { data: admin } = await supabaseAdmin.from('admins').select('id').eq('id', req.uid).maybeSingle();
+    if (admin) {
+      senderRole = 'admin';
+    } else {
+      const { data: designer } = await supabaseAdmin.from('designers').select('id').eq('id', req.uid).maybeSingle();
+      if (designer) {
+        senderRole = 'designer';
+      } else {
+        const { data: mfg } = await supabaseAdmin.from('manufacturers').select('id').eq('id', req.uid).maybeSingle();
+        if (mfg) {
+          senderRole = 'mfg';
+        }
+      }
+    }
+
+    const { data: ticket, error } = await supabaseAdmin
       .from('tickets')
       .insert({
         user_id: req.uid,
@@ -61,7 +110,24 @@ router.post('/', verifyAuth, async (req, res) => {
       .single();
 
     if (error) throw error;
-    res.json({ success: true, ticket: data });
+
+    // If description is provided, insert it as the first message in ticket_messages
+    if (description && description.trim()) {
+      const { error: msgError } = await supabaseAdmin
+        .from('ticket_messages')
+        .insert({
+          ticket_id: ticket.id,
+          sender_id: req.uid,
+          sender_role: senderRole,
+          text: description.trim(),
+          created_at: new Date().toISOString()
+        });
+      if (msgError) {
+        console.error('Error inserting initial ticket description message:', msgError.message);
+      }
+    }
+
+    res.json({ success: true, ticket });
   } catch (err) {
     console.error('Error creating ticket:', err.message);
     res.status(500).json({ error: 'Failed to create ticket' });

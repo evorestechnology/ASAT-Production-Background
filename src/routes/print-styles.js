@@ -48,6 +48,7 @@ router.post('/bulk', verifyAuth, verifyMfg, async (req, res) => {
         ...(isUUID ? { id: s.id } : {}),
         mfg_id: req.uid,
         name: s.name.trim(),
+        category: s.category || 'DTF',
         description: typeof s.description === 'string' ? s.description : JSON.stringify({
           cost: parseFloat(s.cost) || 0,
           description: s.description || '',
@@ -81,7 +82,7 @@ router.post('/bulk', verifyAuth, verifyMfg, async (req, res) => {
 // POST /api/print-styles - Create a single print style (requires auth + mfg)
 router.post('/', verifyAuth, verifyMfg, async (req, res) => {
   try {
-    const { name, cost, placements, customPlacements, imageUrl, active } = req.body;
+    const { name, cost, placements, customPlacements, imageUrl, active, category } = req.body;
     
     if (!name) {
       return res.status(400).json({ error: 'Name is required' });
@@ -92,6 +93,7 @@ router.post('/', verifyAuth, verifyMfg, async (req, res) => {
       .insert({
         mfg_id: req.uid,
         name: name.trim(),
+        category: category || 'DTF',
         description: JSON.stringify({
           cost: parseFloat(cost) || 0,
           placements: placements || [],
@@ -117,7 +119,7 @@ router.post('/', verifyAuth, verifyMfg, async (req, res) => {
 router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, cost, placements, customPlacements, imageUrl, active } = req.body;
+    const { name, cost, placements, customPlacements, imageUrl, active, category } = req.body;
 
     // Fetch original to check ownership
     const { data: original, error: fetchErr } = await supabaseAdmin
@@ -139,6 +141,7 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
     };
 
     if (name !== undefined) payload.name = name.trim();
+    if (category !== undefined) payload.category = category;
     if (imageUrl !== undefined) payload.image = imageUrl;
     if (active !== undefined) payload.active = active;
 
