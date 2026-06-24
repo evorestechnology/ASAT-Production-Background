@@ -75,10 +75,10 @@ router.get('/:id', async (req, res) => {
   console.log(`[DEBUG] Route hit: GET /api/designs/${req.params.id}`);
   try {
     const { id } = req.params;
-    console.log(`[DEBUG] Executing Supabase query: from('designs').select('*').eq('id', '${id}').single()`);
+    console.log(`[DEBUG] Executing Supabase query: from('designs').select('*, designers:designer_id(full_name, username)').eq('id', '${id}').single()`);
     const { data, error } = await supabaseAdmin
       .from('designs')
-      .select('*')
+      .select('*, designers:designer_id(full_name, username)')
       .eq('id', id)
       .single();
 
