@@ -17,7 +17,20 @@ router.get('/', async (req, res) => {
     const { data, error } = await query.order('name', { ascending: true });
 
     if (error) throw error;
-    res.json(data || []);
+
+    const formatted = (data || []).map(row => {
+      let desc = {};
+      try {
+        desc = JSON.parse(row.description);
+      } catch (e) {}
+      return {
+        ...row,
+        category: row.category || desc.category || 'DTF',
+        placementCategories: desc.placementCategories || []
+      };
+    });
+
+    res.json(formatted);
   } catch (err) {
     console.error('Error fetching print styles:', err.message);
     res.status(500).json({ error: 'Failed to fetch print styles' });
@@ -48,12 +61,13 @@ router.post('/bulk', verifyAuth, verifyMfg, async (req, res) => {
         ...(isUUID ? { id: s.id } : {}),
         mfg_id: req.uid,
         name: s.name.trim(),
-        category: s.category || 'DTF',
         description: typeof s.description === 'string' ? s.description : JSON.stringify({
           cost: parseFloat(s.cost) || 0,
+          category: s.category || 'DTF',
           description: s.description || '',
           placements: s.placements || [],
-          customPlacements: s.customPlacements || []
+          customPlacements: s.customPlacements || [],
+          placementCategories: s.placementCategories || []
         }),
         image: s.imageUrl || s.image || '',
         active: s.active !== undefined ? s.active : true,
@@ -82,7 +96,7 @@ router.post('/bulk', verifyAuth, verifyMfg, async (req, res) => {
 // POST /api/print-styles - Create a single print style (requires auth + mfg)
 router.post('/', verifyAuth, verifyMfg, async (req, res) => {
   try {
-    const { name, cost, placements, customPlacements, imageUrl, active, category } = req.body;
+    const { name, cost, placements, customPlacements, placementCategories, imageUrl, active, category } = req.body;
     
     if (!name) {
       return res.status(400).json({ error: 'Name is required' });
@@ -93,11 +107,12 @@ router.post('/', verifyAuth, verifyMfg, async (req, res) => {
       .insert({
         mfg_id: req.uid,
         name: name.trim(),
-        category: category || 'DTF',
         description: JSON.stringify({
           cost: parseFloat(cost) || 0,
+          category: category || 'DTF',
           placements: placements || [],
-          customPlacements: customPlacements || []
+          customPlacements: customPlacements || [],
+          placementCategories: placementCategories || []
         }),
         image: imageUrl || '',
         active: active !== undefined ? active : true,
@@ -108,7 +123,12 @@ router.post('/', verifyAuth, verifyMfg, async (req, res) => {
       .single();
 
     if (error) throw error;
-    res.json({ success: true, style: data });
+
+    const formatted = {
+      ...data,
+      category: category || 'DTF'
+    };
+    res.json({ success: true, style: formatted });
   } catch (err) {
     console.error('Error creating print style:', err.message);
     res.status(500).json({ error: 'Failed to create print style' });
@@ -119,7 +139,7 @@ router.post('/', verifyAuth, verifyMfg, async (req, res) => {
 router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, cost, placements, customPlacements, imageUrl, active, category } = req.body;
+    const { name, cost, placements, customPlacements, placementCategories, imageUrl, active, category } = req.body;
 
     // Fetch original to check ownership
     const { data: original, error: fetchErr } = await supabaseAdmin
@@ -141,7 +161,6 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
     };
 
     if (name !== undefined) payload.name = name.trim();
-    if (category !== undefined) payload.category = category;
     if (imageUrl !== undefined) payload.image = imageUrl;
     if (active !== undefined) payload.active = active;
 
@@ -155,9 +174,11 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
 
     const newDesc = {
       cost: cost !== undefined ? parseFloat(cost) : (currentDesc.cost || 0),
+      category: category !== undefined ? category : (currentDesc.category || 'DTF'),
       description: currentDesc.description || '',
       placements: placements !== undefined ? placements : (currentDesc.placements || []),
-      customPlacements: customPlacements !== undefined ? customPlacements : (currentDesc.customPlacements || [])
+      customPlacements: customPlacements !== undefined ? customPlacements : (currentDesc.customPlacements || []),
+      placementCategories: placementCategories !== undefined ? placementCategories : (currentDesc.placementCategories || [])
     };
 
     payload.description = JSON.stringify(newDesc);
@@ -170,7 +191,12 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
       .single();
 
     if (error) throw error;
-    res.json({ success: true, style: data });
+
+    const formatted = {
+      ...data,
+      category: newDesc.category
+    };
+    res.json({ success: true, style: formatted });
   } catch (err) {
     console.error('Error updating print style:', err.message);
     res.status(500).json({ error: 'Failed to update print style' });

@@ -145,14 +145,106 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Required fields: order_id, items, total_amount' });
     }
 
+    let computedMfgEarnings = 0;
+    let computedDesignerEarnings = 0;
+
+    if (items && Array.isArray(items)) {
+      for (const item of items) {
+        const qty = Number(item.qty) || 1;
+        const itemPrice = Number(item.price) || 0;
+
+        if (item.isMfgProduct) {
+          computedMfgEarnings += itemPrice * qty;
+        } else {
+          try {
+            const { data: design, error: dErr } = await supabaseAdmin
+              .from('designs')
+              .select('*')
+              .eq('id', item.id)
+              .single();
+
+            if (design && !dErr) {
+              const desc = typeof design.description === 'string' ? JSON.parse(design.description) : design.description;
+              const pricing = desc?.pricing || {};
+
+              const baseCost = Number(pricing.baseCost) || 0;
+              const printingCost = Number(pricing.printingCost) || 0;
+              const designerCost = Number(pricing.designerCost) || 0;
+
+              let actualPrintingCost = printingCost;
+
+              // Check if selected color has light garment mode
+              const bpId = design.base_product_id;
+              if (bpId) {
+                const { data: baseProduct, error: bpErr } = await supabaseAdmin
+                  .from('products')
+                  .select('*')
+                  .eq('id', bpId)
+                  .single();
+
+                if (baseProduct && !bpErr) {
+                  const colors = Array.isArray(baseProduct.colors) ? baseProduct.colors : [];
+                  const matchedColor = colors.find(c => c.colorName === item.colorName);
+                  if (matchedColor && matchedColor.mode === 'light') {
+                    // Selected color is a light garment!
+                    // Let's compute actual light garment cost for DTG style placements
+                    const placements = desc?.placements?.[item.colorName] || [];
+                    let lightPrintingCost = 0;
+                    let darkPrintingCost = 0;
+
+                    for (const placement of placements) {
+                      const styleName = placement.style || '';
+                      const placementId = placement.placementId || '';
+
+                      const printingStyles = Array.isArray(baseProduct.printing_styles) ? baseProduct.printing_styles : [];
+                      const ps = printingStyles.find(x => x.style?.toLowerCase() === styleName.toLowerCase());
+                      if (ps) {
+                        const pl = (ps.placements || []).find(p => p.id === placementId);
+                        if (pl) {
+                          if (styleName.toLowerCase() === 'dtg') {
+                            lightPrintingCost += Number(pl.cost_light) || 0;
+                            darkPrintingCost += Number(pl.cost_dark) || 0;
+                          } else {
+                            lightPrintingCost += Number(pl.price) || 0;
+                            darkPrintingCost += Number(pl.price) || 0;
+                          }
+                        }
+                      }
+                    }
+
+                    if (darkPrintingCost > lightPrintingCost) {
+                      actualPrintingCost = lightPrintingCost;
+                    }
+                  }
+                }
+              }
+
+              computedMfgEarnings += (baseCost + actualPrintingCost) * qty;
+              computedDesignerEarnings += designerCost * qty;
+            } else {
+              computedDesignerEarnings += Math.round(itemPrice * qty * 0.1);
+              computedMfgEarnings += Math.round(itemPrice * qty * 0.4);
+            }
+          } catch (err) {
+            console.error("Error calculating item earnings on backend:", err);
+            computedDesignerEarnings += Math.round(itemPrice * qty * 0.1);
+            computedMfgEarnings += Math.round(itemPrice * qty * 0.4);
+          }
+        }
+      }
+    }
+
+    const computedPlatformEarnings = Math.max(0, total_amount - computedMfgEarnings - computedDesignerEarnings);
+
     const payload = {
       order_id,
       user_id: user_id || null,
       customer_name,
       items,
       total_amount,
-      designer_earnings: designer_earnings || 0,
-      mfg_earnings: mfg_earnings || 0,
+      designer_earnings: computedDesignerEarnings,
+      mfg_earnings: computedMfgEarnings,
+      platform_earnings: computedPlatformEarnings,
       designer_id: designer_id || null,
       designer_username: designer_username || 'anonymous',
       mfg_id: mfg_id || null,

@@ -1,7 +1,8 @@
--- ══════════════════════════════════════════════════════════════
+-- ═════════════════════════════════════════════════════════════
 -- ASAT Database Schema for Supabase (PostgreSQL)
+-- Matches current database schema as of 2026-06-27
 -- Run this in: Supabase Dashboard → SQL Editor → New Query
--- ══════════════════════════════════════════════════════════════
+-- ═════════════════════════════════════════════════════════════
 
 -- ─── CORE TABLES ────────────────────────────────────────────
 
@@ -40,6 +41,17 @@ CREATE TABLE IF NOT EXISTS admins (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- Admin Invites (for inviting new admins)
+CREATE TABLE IF NOT EXISTS admin_invites (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email      TEXT UNIQUE NOT NULL,
+  role       TEXT DEFAULT 'support' CHECK (role IN ('support', 'moderator', 'admin')),
+  display_name TEXT NOT NULL,
+  status     TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'revoked', 'expired')),
+  created_at TIMESTAMPTZ DEFAULT now(),
+  accepted_at TIMESTAMPTZ NULL
+);
+
 -- Designers
 CREATE TABLE IF NOT EXISTS designers (
   id              UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -70,6 +82,8 @@ CREATE TABLE IF NOT EXISTS manufacturers (
   contact       TEXT,
   address       TEXT,
   gst           TEXT,
+  status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','inactive','suspended','deleted')),
+  deleted_at    TIMESTAMPTZ,
   created_at    TIMESTAMPTZ DEFAULT now(),
   updated_at    TIMESTAMPTZ DEFAULT now()
 );
@@ -81,7 +95,11 @@ CREATE TABLE IF NOT EXISTS categories (
   name        TEXT NOT NULL,
   image       TEXT,
   description TEXT,
-  created_at  TIMESTAMPTZ DEFAULT now()
+  area        TEXT NOT NULL DEFAULT 'default',
+  "order"     INTEGER NOT NULL DEFAULT 0,
+  active      BOOLEAN NOT NULL DEFAULT true,
+  created_at  TIMESTAMPTZ DEFAULT now(),
+  updated_at  TIMESTAMPTZ DEFAULT now()
 );
 
 -- Catalogue (base products/garment types)
@@ -111,6 +129,8 @@ CREATE TABLE IF NOT EXISTS products (
   printing_styles  JSONB DEFAULT '[]',
   size_chart_image TEXT,
   sizes            JSONB DEFAULT '[]',
+  details          JSONB DEFAULT '[]',
+  wash_care        JSONB DEFAULT '[]',
   mfg_id           UUID NOT NULL REFERENCES manufacturers(id) ON DELETE CASCADE,
   mfg_name         TEXT,
   available        BOOLEAN DEFAULT true,
@@ -137,6 +157,8 @@ CREATE TABLE IF NOT EXISTS designs (
   total_earnings    NUMERIC(12,2) DEFAULT 0,
   reviewed_by       UUID,
   reviewed_at       TIMESTAMPTZ,
+  rejection_reason  TEXT,
+  base_product_id   UUID REFERENCES products(id),
   created_at        TIMESTAMPTZ DEFAULT now(),
   updated_at        TIMESTAMPTZ DEFAULT now()
 );
@@ -244,9 +266,9 @@ CREATE TABLE IF NOT EXISTS print_styles (
 );
 
 
--- ═══════════════════════════════════════════════════════════
+-- ════════════════════════════════════════════════════════════
 -- INDEXES
--- ═══════════════════════════════════════════════════════════
+-- ════════════════════════════════════════════════════════════
 
 CREATE INDEX IF NOT EXISTS idx_designs_designer      ON designs(designer_id);
 CREATE INDEX IF NOT EXISTS idx_designs_status         ON designs(status);
@@ -268,18 +290,18 @@ CREATE INDEX IF NOT EXISTS idx_products_mfg           ON products(mfg_id);
 CREATE INDEX IF NOT EXISTS idx_products_available     ON products(available);
 
 
--- ═══════════════════════════════════════════════════════════
+-- ════════════════════════════════════════════════════════════
 -- SEED DATA
--- ═══════════════════════════════════════════════════════════
+-- ════════════════════════════════════════════════════════════
 
 INSERT INTO settings (key, value) VALUES
   ('earnings', '{"designer": 30, "mfg": 40, "platform": 30}')
 ON CONFLICT (key) DO NOTHING;
 
 
--- ═══════════════════════════════════════════════════════════
+-- ═════════════════════════════════════════════════════════════
 -- ROW LEVEL SECURITY (RLS) POLICIES
--- ═══════════════════════════════════════════════════════════
+-- ════════════════════════════════════════════════════════════
 
 -- Enable RLS on all tables
 ALTER TABLE users           ENABLE ROW LEVEL SECURITY;
@@ -483,9 +505,9 @@ CREATE POLICY "Admins full access print styles"  ON print_styles FOR ALL USING (
 );
 
 
--- ═══════════════════════════════════════════════════════════
+-- ════════════════════════════════════════════════════════════
 -- STORAGE BUCKET
--- ═══════════════════════════════════════════════════════════
+-- ════════════════════════════════════════════════════════════
 -- Run this separately or create via Supabase Dashboard:
 -- 1. Go to Storage → Create bucket "asat-uploads" with Public access
 -- 2. Add policy: Allow authenticated users to upload

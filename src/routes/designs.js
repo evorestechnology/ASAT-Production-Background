@@ -4,13 +4,23 @@ import { verifyAuth, verifyDesigner, verifyAdmin, resolveAnyRole } from '../midd
 
 const router = express.Router();
 
+// Helper: check if a design has been hidden by the designer (stored in description JSON)
+const isDesignHidden = (design) => {
+  try {
+    if (design.description && typeof design.description === 'string' && design.description.startsWith('{')) {
+      return JSON.parse(design.description).isHidden === true;
+    }
+  } catch (e) {}
+  return false;
+};
+
 // GET /api/designs - List approved designs (public)
 router.get('/', async (req, res) => {
   try {
     const { designerId, sort, limit } = req.query;
     let query = supabaseAdmin
       .from('designs')
-      .select('*, products:base_product_id(category), catalogue:catalogue_item_id(category)')
+      .select('*, products:base_product_id(category, available, details), catalogue:catalogue_item_id(category)')
       .in('status', ['approved', 'active']);
 
     if (designerId) {
@@ -28,9 +38,19 @@ router.get('/', async (req, res) => {
     }
 
     const { data, error } = await dbQuery;
-
     if (error) throw error;
-    res.json(data || []);
+
+    const activeDesigns = (data || []).filter(d => {
+      // Exclude designs hidden by the designer
+      if (isDesignHidden(d)) return false;
+      if (d.products) {
+        const details = Array.isArray(d.products.details) ? d.products.details : [];
+        return d.products.available !== false && !details.includes('__DELETED__');
+      }
+      return true;
+    });
+
+    res.json(activeDesigns);
   } catch (err) {
     console.error('Error fetching designs:', err.message);
     res.status(500).json({ error: 'Failed to fetch designs' });
@@ -42,7 +62,7 @@ router.get('/mine', verifyAuth, verifyDesigner, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('designs')
-      .select('*')
+      .select('*, products:base_product_id(available, details)')
       .eq('designer_id', req.uid)
       .order('created_at', { ascending: false });
 
@@ -78,7 +98,7 @@ router.get('/:id', async (req, res) => {
     console.log(`[DEBUG] Executing Supabase query: from('designs').select('*, designers:designer_id(full_name, username)').eq('id', '${id}').single()`);
     const { data, error } = await supabaseAdmin
       .from('designs')
-      .select('*, designers:designer_id(full_name, username)')
+      .select('*, designers:designer_id(full_name, username), products:base_product_id(available, details)')
       .eq('id', id)
       .single();
 
@@ -91,6 +111,16 @@ router.get('/:id', async (req, res) => {
     }
     if (!data) {
       console.log(`[DEBUG] Query returned no data (falsy) for design ${id}`);
+      return res.status(404).json({ error: 'Design not found' });
+    }
+    if (data.products) {
+      const details = Array.isArray(data.products.details) ? data.products.details : [];
+      if (data.products.available === false || details.includes('__DELETED__')) {
+        return res.status(404).json({ error: 'Design unavailable' });
+      }
+    }
+    // Block access if designer has hidden this design
+    if (isDesignHidden(data)) {
       return res.status(404).json({ error: 'Design not found' });
     }
     console.log(`[DEBUG] Supabase query success for design ${id}`);

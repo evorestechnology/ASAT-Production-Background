@@ -23,6 +23,7 @@ router.get('/', async (req, res) => {
     const { data, error } = await query.order('created_at', { ascending: false });
 
     if (error) throw error;
+    res.set('Cache-Control', 'no-store');
     res.json(data || []);
   } catch (err) {
     console.error('Error fetching available products:', err.message);
@@ -40,7 +41,12 @@ router.get('/mfg', verifyAuth, verifyMfg, async (req, res) => {
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    res.json(data || []);
+    const activeProducts = (data || []).filter(p => {
+      const details = Array.isArray(p.details) ? p.details : [];
+      return !details.includes('__DELETED__');
+    });
+    res.set('Cache-Control', 'no-store');
+    res.json(activeProducts);
   } catch (err) {
     console.error('Error fetching manufacturer products:', err.message);
     res.status(500).json({ error: 'Failed to fetch products' });
@@ -71,6 +77,7 @@ router.get('/:id', verifyAuth, async (req, res) => {
       return res.status(404).json({ error: 'Product not found' });
     }
     console.log(`[DEBUG] Supabase query success for product ${id}`);
+    res.set('Cache-Control', 'no-store');
     res.json(data);
   } catch (err) {
     console.error(`[DEBUG] Exception in GET /api/products/:id:`, err.stack);
@@ -191,8 +198,8 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
       .select()
       .single();
 
-    if (error) throw error;
-    res.json({ success: true, product: data });
+    if (updateErr) throw updateErr;
+    res.json({ success: true, product: updated });
   } catch (err) {
     console.error('Error updating product:', err.message);
     res.status(500).json({ error: 'Failed to update product' });
@@ -207,7 +214,7 @@ router.delete('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
     // Check ownership or admin
     const { data: original, error: fetchErr } = await supabaseAdmin
       .from('products')
-      .select('mfg_id')
+      .select('mfg_id, details')
       .eq('id', id)
       .single();
 
@@ -219,9 +226,18 @@ router.delete('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized to delete this product.' });
     }
 
+    const currentDetails = Array.isArray(original.details) ? original.details : [];
+    if (!currentDetails.includes('__DELETED__')) {
+      currentDetails.push('__DELETED__');
+    }
+
     const { error } = await supabaseAdmin
       .from('products')
-      .delete()
+      .update({
+        available: false,
+        details: currentDetails,
+        updated_at: new Date().toISOString()
+      })
       .eq('id', id);
 
     if (error) throw error;
