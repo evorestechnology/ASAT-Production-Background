@@ -70,4 +70,4 @@ BEGIN
   VALUES (new_uid, admin_email, admin_name);
 
   RAISE NOTICE 'Admin user created successfully with UID %', new_uid;
-END $$;
+END $$; 

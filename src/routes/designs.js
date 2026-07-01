@@ -90,7 +90,7 @@ router.get('/all', verifyAuth, verifyAdmin, async (req, res) => {
   }
 });
 
-// GET /api/designs/:id - Get single design details (public)
+// GET /api/designs/:id - Get single design details (public/private-for-owner-admin)
 router.get('/:id', async (req, res) => {
   console.log(`[DEBUG] Route hit: GET /api/designs/${req.params.id}`);
   try {
@@ -113,16 +113,49 @@ router.get('/:id', async (req, res) => {
       console.log(`[DEBUG] Query returned no data (falsy) for design ${id}`);
       return res.status(404).json({ error: 'Design not found' });
     }
-    if (data.products) {
-      const details = Array.isArray(data.products.details) ? data.products.details : [];
-      if (data.products.available === false || details.includes('__DELETED__')) {
-        return res.status(404).json({ error: 'Design unavailable' });
+
+    // Optional auth token check to let Admins and Owners bypass public visibility checks
+    let userRole = null;
+    let userId = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split('Bearer ')[1];
+      try {
+        const { data: { user }, error: authErr } = await supabaseAdmin.auth.getUser(token);
+        if (user && !authErr) {
+          userId = user.id;
+          // check if admin
+          const { data: admin } = await supabaseAdmin.from('admins').select('*').eq('id', user.id).maybeSingle();
+          if (admin) {
+            userRole = 'admin';
+          } else {
+            const { data: designer } = await supabaseAdmin.from('designers').select('*').eq('id', user.id).maybeSingle();
+            if (designer) {
+              userRole = 'designer';
+            }
+          }
+        }
+      } catch (authCatchErr) {
+        console.error('[DEBUG] Optional auth parsing error:', authCatchErr.message);
       }
     }
-    // Block access if designer has hidden this design
-    if (isDesignHidden(data)) {
-      return res.status(404).json({ error: 'Design not found' });
+
+    const isAdmin = userRole === 'admin';
+    const isOwner = userRole === 'designer' && data.designer_id === userId;
+
+    if (!isAdmin && !isOwner) {
+      if (data.products) {
+        const details = Array.isArray(data.products.details) ? data.products.details : [];
+        if (data.products.available === false || details.includes('__DELETED__')) {
+          return res.status(404).json({ error: 'Design unavailable' });
+        }
+      }
+      // Block access if designer has hidden this design
+      if (isDesignHidden(data)) {
+        return res.status(404).json({ error: 'Design not found' });
+      }
     }
+
     console.log(`[DEBUG] Supabase query success for design ${id}`);
     res.json(data);
   } catch (err) {
