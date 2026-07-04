@@ -53,8 +53,8 @@ router.get('/mfg', verifyAuth, verifyMfg, async (req, res) => {
   }
 });
 
-// GET /api/products/:id - Get single base product details (designer/mfg only)
-router.get('/:id', verifyAuth, async (req, res) => {
+// GET /api/products/:id - Get single base product details (public)
+router.get('/:id', async (req, res) => {
   console.log(`[DEBUG] Route hit: GET /api/products/${req.params.id}`);
   try {
     const { id } = req.params;

@@ -36,7 +36,7 @@ router.get('/', verifyAuth, resolveAnyRole, async (req, res) => {
     const uid = req.uid;
     const role = req.role;
 
-    let query = supabaseAdmin.from('orders').select('*');
+    let query = supabaseAdmin.from('orders').select('*, users(email)');
 
     if (role === 'admin') {
       // Admin sees all
@@ -85,7 +85,7 @@ router.get('/all', verifyAuth, async (req, res, next) => {
     if (!admin) return res.status(403).json({ error: 'Admin access required' });
     const { data, error } = await supabaseAdmin
       .from('orders')
-      .select('*')
+      .select('*, users(email)')
       .order('created_at', { ascending: false });
     if (error) throw error;
     res.json(data || []);
@@ -105,7 +105,7 @@ router.get('/:id', async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from('orders')
-      .select('*')
+      .select('*, users(email)')
       .eq(column, id)
       .single();
 
@@ -145,7 +145,8 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Required fields: order_id, items, total_amount' });
     }
 
-    let computedMfgEarnings = 0;
+    const shipping_amount = Number(req.body.shipping_amount) || 0;
+    let computedMfgEarnings = shipping_amount;
     let computedDesignerEarnings = 0;
 
     if (items && Array.isArray(items)) {

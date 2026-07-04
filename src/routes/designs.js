@@ -129,9 +129,14 @@ router.get('/:id', async (req, res) => {
           if (admin) {
             userRole = 'admin';
           } else {
-            const { data: designer } = await supabaseAdmin.from('designers').select('*').eq('id', user.id).maybeSingle();
-            if (designer) {
-              userRole = 'designer';
+            const { data: mfg } = await supabaseAdmin.from('manufacturers').select('*').eq('id', user.id).maybeSingle();
+            if (mfg) {
+              userRole = 'mfg';
+            } else {
+              const { data: designer } = await supabaseAdmin.from('designers').select('*').eq('id', user.id).maybeSingle();
+              if (designer) {
+                userRole = 'designer';
+              }
             }
           }
         }
@@ -141,9 +146,10 @@ router.get('/:id', async (req, res) => {
     }
 
     const isAdmin = userRole === 'admin';
+    const isMfg = userRole === 'mfg';
     const isOwner = userRole === 'designer' && data.designer_id === userId;
 
-    if (!isAdmin && !isOwner) {
+    if (!isAdmin && !isMfg && !isOwner) {
       if (data.products) {
         const details = Array.isArray(data.products.details) ? data.products.details : [];
         if (data.products.available === false || details.includes('__DELETED__')) {
