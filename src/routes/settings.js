@@ -36,7 +36,7 @@ router.get('/:key', async (req, res) => {
       .maybeSingle();
 
     if (error) throw error;
-    if (!data) return res.status(404).json({ error: 'Setting not found' });
+    if (!data) return res.json({ key, value: null });
     
     res.json(data);
   } catch (err) {
