@@ -127,6 +127,61 @@ router.post('/', verifyAuth, async (req, res) => {
       }
     }
 
+    // Resolve user's display name for greeting
+    let displayName = 'Customer';
+    try {
+      if (senderRole === 'user') {
+        const { data: userData } = await supabaseAdmin.from('users').select('full_name').eq('id', req.uid).maybeSingle();
+        if (userData && userData.full_name) displayName = userData.full_name;
+      } else if (senderRole === 'designer') {
+        const { data: designerData } = await supabaseAdmin.from('designers').select('username, full_name').eq('id', req.uid).maybeSingle();
+        if (designerData) displayName = designerData.username || designerData.full_name || 'Designer';
+      } else if (senderRole === 'mfg') {
+        const { data: mfgData } = await supabaseAdmin.from('manufacturers').select('business_name').eq('id', req.uid).maybeSingle();
+        if (mfgData && mfgData.business_name) displayName = mfgData.business_name;
+      }
+    } catch (fetchNameErr) {
+      console.error('Error fetching display name for ticket auto-reply:', fetchNameErr.message);
+    }
+
+    // Create automatic reply message from Customer Support Team
+    const autoReplyText = `Hello ${displayName},
+
+We sincerely apologize for the inconvenience you're experiencing.
+
+Thank you for bringing this to our attention. Our support team has received your request and will review it on priority. We will investigate the issue and keep you updated until it is resolved.
+
+Thank you for your patience and understanding.
+
+Regards,
+Customer Support Team
+As Simple as That`;
+
+    // Insert auto reply 1 second after to ensure correct order
+    const autoReplyTime = new Date(Date.now() + 1000).toISOString();
+    const { error: autoReplyError } = await supabaseAdmin
+      .from('ticket_messages')
+      .insert({
+        ticket_id: ticket.id,
+        sender_id: req.uid, // Sent on behalf of admin, role: admin
+        sender_role: 'admin',
+        text: autoReplyText,
+        created_at: autoReplyTime
+      });
+
+    if (autoReplyError) {
+      console.error('Error inserting auto reply:', autoReplyError.message);
+    } else {
+      // Update ticket last_reply to 'admin'
+      await supabaseAdmin
+        .from('tickets')
+        .update({
+          last_reply: 'admin',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', ticket.id);
+    }
+
     res.json({ success: true, ticket });
   } catch (err) {
     console.error('Error creating ticket:', err.message);
