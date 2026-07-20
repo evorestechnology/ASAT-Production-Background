@@ -157,13 +157,24 @@ Regards,
 Customer Support Team
 As Simple as That`;
 
+    // Query a real admin user ID if exists, otherwise fall back to a dummy UUID
+    let adminSenderId = '00000000-0000-0000-0000-000000000000';
+    try {
+      const { data: firstAdmin } = await supabaseAdmin.from('admins').select('id').limit(1).maybeSingle();
+      if (firstAdmin && firstAdmin.id) {
+        adminSenderId = firstAdmin.id;
+      }
+    } catch (adminErr) {
+      console.error('Error fetching admin ID for auto-reply:', adminErr.message);
+    }
+
     // Insert auto reply 1 second after to ensure correct order
     const autoReplyTime = new Date(Date.now() + 1000).toISOString();
     const { error: autoReplyError } = await supabaseAdmin
       .from('ticket_messages')
       .insert({
         ticket_id: ticket.id,
-        sender_id: req.uid, // Sent on behalf of admin, role: admin
+        sender_id: adminSenderId,
         sender_role: 'admin',
         text: autoReplyText,
         created_at: autoReplyTime
