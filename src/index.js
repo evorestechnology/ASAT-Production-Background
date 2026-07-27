@@ -39,6 +39,7 @@ import storageRouter from './routes/storage.js';
 import dashboardRouter from './routes/dashboard.js';
 import activityRouter from './routes/activity.js';
 import currencyRouter from './routes/currency.js';
+import paymentRouter from './routes/payment.js';
 
 const app = express();
 
@@ -148,9 +149,9 @@ app.post('/api/auth/send-otp', async (req, res) => {
     }
 
     console.log('\n' + '='.repeat(60));
-    console.log(`🔐 [VERIFICATION CODE FOR ${email.toUpperCase()}]:`);
-    console.log(`👉   ${otp}   👈`);
-    console.log('='.repeat(60) + '\n');
+    // console.log(`🔐 [VERIFICATION CODE FOR ${email.toUpperCase()}]:`);
+    // console.log(`👉   ${otp}   👈`);
+    // console.log('='.repeat(60) + '\n');
 
     // Send email using SMTP if configured
     const transporter = getMailTransporter();
@@ -239,6 +240,177 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     res.json(successResponse(null, 'Email verified successfully.'));
   } catch (err) {
     console.error('Error verifying OTP:', err);
+    res.status(500).json(errorResponse('Internal server error', 500));
+  }
+});
+
+// ─── POST /api/auth/forgot-password/send-otp ───
+// Sends a password-reset OTP to the given email, but ONLY if the email
+// belongs to an existing user account (any role). Rate-limited 1 req/60s.
+app.post('/api/auth/forgot-password/send-otp', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email || !validateEmail(email)) {
+      return res.status(400).json(validationErrorResponse({ email: 'Valid email is required' }));
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Rate limiting – reuse the same limiter as registration OTP
+    const now = Date.now();
+    const lastRequest = otpRateLimiter.get(`reset_${normalizedEmail}`);
+    if (lastRequest && now - lastRequest < 60000) {
+      const waitTime = Math.ceil((60000 - (now - lastRequest)) / 1000);
+      return res.status(429).json(errorResponse(`Too many requests. Please wait ${waitTime} seconds before trying again.`, 429));
+    }
+
+    // Check that the email belongs to a real account (check all role tables)
+    let userFound = false;
+    let userUid = null;
+
+    // Check auth user directly via Supabase admin
+    try {
+      const { data: { users }, error: listErr } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+      if (!listErr && users) {
+        const match = users.find(u => u.email && u.email.toLowerCase() === normalizedEmail);
+        if (match) {
+          userFound = true;
+          userUid = match.id;
+        }
+      }
+    } catch (_) { /* continue */ }
+
+    if (!userFound) {
+      // For security, don't reveal whether the email exists — return same message
+      // but skip sending OTP
+      return res.status(404).json(errorResponse('No account found with this email address.'));
+    }
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = Date.now() + 5 * 60 * 1000; // 5 min
+
+    // Store OTP
+    const { error: upsertErr } = await supabaseAdmin
+      .from('otps')
+      .upsert({ email: normalizedEmail, otp, expires_at: expiresAt });
+
+    if (upsertErr) throw upsertErr;
+
+    otpRateLimiter.set(`reset_${normalizedEmail}`, now);
+
+    // Send reset email via SMTP
+    const transporter = getMailTransporter();
+    let sentEmail = false;
+
+    if (transporter) {
+      try {
+        await transporter.sendMail({
+          from: `"As Simple as That" <${process.env.SMTP_USER}>`,
+          to: normalizedEmail,
+          subject: 'ASAT — Password Reset Code',
+          html: `
+            <div style="font-family:'Montserrat',sans-serif;max-width:600px;margin:0 auto;padding:40px;background:#0d0d0d;color:#ffffff;border:1px solid #C5A059;border-radius:12px;">
+              <h2 style="font-family:'Cinzel',serif;font-size:22px;font-weight:700;color:#C5A059;text-align:center;margin-bottom:24px;letter-spacing:2px;">PASSWORD RESET</h2>
+              <p style="font-size:15px;line-height:1.7;color:#cccccc;">We received a request to reset the password for your <strong style="color:#C5A059;">ASAT</strong> account associated with this email address.</p>
+              <p style="font-size:15px;line-height:1.7;color:#cccccc;">Enter the following 6-digit verification code to proceed:</p>
+
+              <div style="text-align:center;margin:36px 0;">
+                <span style="font-family:'Courier New',monospace;font-size:40px;font-weight:700;color:#C5A059;letter-spacing:10px;padding:14px 32px;background:rgba(197,160,89,0.08);border:1px dashed rgba(197,160,89,0.45);border-radius:8px;display:inline-block;">${otp}</span>
+              </div>
+
+              <p style="font-size:13px;color:#888;line-height:1.6;">This code expires in <strong>5 minutes</strong>. If you did not request a password reset, you can safely ignore this email — your password will not be changed.</p>
+              <hr style="border:0;border-top:1px solid rgba(255,255,255,0.07);margin:28px 0;">
+              <p style="font-size:11px;text-align:center;color:#555;letter-spacing:1px;">As Simple as That &bull; curated designer streetwear</p>
+            </div>
+          `,
+        });
+        sentEmail = true;
+        console.log(`✉️  Password-reset OTP sent to ${normalizedEmail}`);
+      } catch (mailErr) {
+        console.error('❌ Failed to send reset OTP email:', mailErr);
+      }
+    }
+
+    res.json({
+      ...successResponse(null, sentEmail
+        ? 'A 6-digit reset code has been sent to your email.'
+        : 'Reset code generated. Check server console.'),
+      ...(process.env.NODE_ENV !== 'production' ? { debugOtp: otp } : {}),
+    });
+  } catch (err) {
+    console.error('Error in forgot-password/send-otp:', err);
+    res.status(500).json(errorResponse('Internal server error', 500));
+  }
+});
+
+// ─── POST /api/auth/forgot-password/reset ───
+// Verifies OTP then updates the user's password via Supabase Admin API.
+app.post('/api/auth/forgot-password/reset', async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+
+    // Validate inputs
+    const errors = {};
+    if (!email || !validateEmail(email)) errors.email = 'Valid email is required';
+    if (!otp || otp.length !== 6 || !/^\d+$/.test(otp)) errors.otp = 'Valid 6-digit code is required';
+    if (!newPassword || newPassword.trim().length < 6) errors.newPassword = 'Password must be at least 6 characters';
+    if (Object.keys(errors).length > 0) {
+      return res.status(400).json(validationErrorResponse(errors));
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Verify OTP from DB
+    const { data: otpData, error: fetchErr } = await supabaseAdmin
+      .from('otps')
+      .select('*')
+      .eq('email', normalizedEmail)
+      .single();
+
+    if (fetchErr || !otpData) {
+      return res.status(400).json(errorResponse('No reset code found for this email. Please request a new one.'));
+    }
+    if (Date.now() > Number(otpData.expires_at)) {
+      await supabaseAdmin.from('otps').delete().eq('email', normalizedEmail);
+      return res.status(400).json(errorResponse('Reset code has expired. Please request a new one.'));
+    }
+    if (otpData.otp !== otp.trim()) {
+      return res.status(400).json(errorResponse('Invalid reset code. Please check and try again.'));
+    }
+
+    // OTP valid — delete it
+    await supabaseAdmin.from('otps').delete().eq('email', normalizedEmail);
+
+    // Find the Supabase Auth user UID
+    let uid = null;
+    try {
+      const { data: { users }, error: listErr } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+      if (!listErr && users) {
+        const match = users.find(u => u.email && u.email.toLowerCase() === normalizedEmail);
+        if (match) uid = match.id;
+      }
+    } catch (_) { /* continue */ }
+
+    if (!uid) {
+      return res.status(404).json(errorResponse('Account not found.'));
+    }
+
+    // Update password via admin API
+    const { error: updateErr } = await supabaseAdmin.auth.admin.updateUserById(uid, {
+      password: newPassword.trim(),
+    });
+
+    if (updateErr) throw updateErr;
+
+    // Clear rate-limiter entry so user can request new OTPs immediately
+    otpRateLimiter.delete(`reset_${normalizedEmail}`);
+
+    // console.log(`✅ Password reset successfully for ${normalizedEmail}`);
+    res.json(successResponse(null, 'Password has been reset successfully. You can now sign in.'));
+  } catch (err) {
+    console.error('Error in forgot-password/reset:', err);
     res.status(500).json(errorResponse('Internal server error', 500));
   }
 });
@@ -575,6 +747,7 @@ app.use('/api/storage', storageRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/activity', activityRouter);
 app.use('/api/currency', currencyRouter);
+app.use('/api/payment', paymentRouter);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
