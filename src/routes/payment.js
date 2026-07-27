@@ -5,7 +5,7 @@ import { optionalAuth } from '../middleware/auth.js';
 const router = express.Router();
 
 const getCashfreeBaseUrl = () => {
-  const env = (process.env.CASHFREE_ENV || 'TEST').toUpperCase();
+  const env = (process.env.CASHFREE_ENV || 'PRODUCTION').toUpperCase();
   return env === 'PRODUCTION' ? 'https://api.cashfree.com/pg' : 'https://sandbox.cashfree.com/pg';
 };
 
@@ -28,12 +28,10 @@ router.post('/create-order', optionalAuth, async (req, res) => {
     if (phoneStr.length < 10) phoneStr = '9999999999';
     if (phoneStr.length > 10) phoneStr = phoneStr.slice(-10);
 
-    let originUrl = req.headers.origin || 'https://as-simple-as-that.com';
+    let originUrl = req.headers.origin || 'https://asat-production-frontend.vercel.app';
     let returnUrl = `${originUrl}/orders?order_id=${orderId}`;
     if (returnUrl.startsWith('http://') && !returnUrl.includes('localhost')) {
       returnUrl = returnUrl.replace('http://', 'https://');
-    } else if (returnUrl.startsWith('http://localhost')) {
-      returnUrl = returnUrl.replace('http://localhost', 'https://localhost');
     }
 
     const payload = {
@@ -51,18 +49,6 @@ router.post('/create-order', optionalAuth, async (req, res) => {
       },
       order_note: `ASAT Purchase - ${cartItems?.length || 1} item(s)`
     };
-
-    // If using default placeholder keys, return simulated session for quick test
-    if (!appId || appId === 'TEST_APP_ID' || !secretKey || secretKey === 'TEST_SECRET_KEY') {
-      console.log('Cashfree API keys not set or using placeholders. Returning simulated payment session.');
-      return res.json({
-        success: true,
-        payment_session_id: `session_simulated_${Date.now()}`,
-        order_id: orderId,
-        isSimulated: true,
-        cfEnv: process.env.CASHFREE_ENV || 'TEST'
-      });
-    }
 
     const response = await fetch(`${baseUrl}/orders`, {
       method: 'POST',
@@ -89,7 +75,7 @@ router.post('/create-order', optionalAuth, async (req, res) => {
       success: true,
       payment_session_id: data.payment_session_id,
       order_id: data.order_id,
-      cfEnv: process.env.CASHFREE_ENV || 'TEST'
+      cfEnv: process.env.CASHFREE_ENV || 'PRODUCTION'
     });
   } catch (err) {
     console.error('Error in Cashfree order creation:', err.message);
