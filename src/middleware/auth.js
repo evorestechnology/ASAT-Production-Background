@@ -1,5 +1,25 @@
 import { supabaseAdmin } from '../supabaseAdmin.js';
 
+// Middleware to optional Supabase JWT (allows guest checkout if token missing or expired)
+export async function optionalAuth(req, res, next) {
+  const header = req.headers.authorization;
+  if (header && header.startsWith('Bearer ')) {
+    const token = header.split('Bearer ')[1];
+    try {
+      const { data: { user } } = await supabaseAdmin.auth.getUser(token);
+      if (user) {
+        req.uid = user.id;
+        req.user = user;
+        return next();
+      }
+    } catch (err) {
+      // ignore token error
+    }
+  }
+  req.uid = `guest_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+  next();
+}
+
 // Middleware to verify Supabase JWT
 export async function verifyAuth(req, res, next) {
   const header = req.headers.authorization;
