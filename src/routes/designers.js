@@ -72,7 +72,9 @@ router.put('/me', verifyAuth, verifyDesigner, async (req, res) => {
       gender,
       dob,
       username,
-      avatar_url
+      avatar_url,
+      upi_id,
+      paypal_id
     } = req.body;
 
     const updatePayload = {
@@ -86,6 +88,8 @@ router.put('/me', verifyAuth, verifyDesigner, async (req, res) => {
     if (gender !== undefined) updatePayload.gender = gender;
     if (dob !== undefined) updatePayload.dob = dob;
     if (avatar_url !== undefined) updatePayload.avatar_url = avatar_url;
+    if (upi_id !== undefined) updatePayload.upi_id = upi_id;
+    if (paypal_id !== undefined) updatePayload.paypal_id = paypal_id;
 
     if (username !== undefined) {
       const trimmedUsername = username.trim().toLowerCase();
@@ -102,12 +106,26 @@ router.put('/me', verifyAuth, verifyDesigner, async (req, res) => {
       updatePayload.username = trimmedUsername;
     }
 
-    const { data, error } = await supabaseAdmin
+    let { data, error } = await supabaseAdmin
       .from('designers')
       .update(updatePayload)
       .eq('id', req.uid)
       .select()
       .single();
+
+    if (error && error.message && error.message.includes('column')) {
+      // Column might not exist in table schema; strip unexisting columns and retry
+      delete updatePayload.upi_id;
+      delete updatePayload.paypal_id;
+      const retry = await supabaseAdmin
+        .from('designers')
+        .update(updatePayload)
+        .eq('id', req.uid)
+        .select()
+        .single();
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error) throw error;
     res.json({ success: true, profile: data });

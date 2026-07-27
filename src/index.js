@@ -430,6 +430,8 @@ app.post('/api/auth/register-designer', async (req, res) => {
       dob,
       address,
       country,
+      upiId,
+      paypalId,
     } = req.body;
 
     // Input validation
@@ -448,6 +450,13 @@ app.post('/api/auth/register-designer', async (req, res) => {
     }
     if (!username || !validateUsername(username)) {
       validationErrors.username = 'Username must be 3-20 characters (letters, numbers, underscore, hyphen only)';
+    }
+
+    const isIndia = (country || '').trim().toLowerCase() === 'india';
+    if (isIndia && (!upiId || !upiId.trim())) {
+      validationErrors.upiId = 'UPI ID is required for designers in India';
+    } else if (!isIndia && (!paypalId || !paypalId.trim())) {
+      validationErrors.paypalId = 'PayPal ID is required for international designers';
     }
 
     if (Object.keys(validationErrors).length > 0) {
@@ -494,7 +503,7 @@ app.post('/api/auth/register-designer', async (req, res) => {
     const uid = authData.user.id;
 
     // 3. Insert Designer Profile
-    const { error: profileError } = await supabaseAdmin.from('designers').insert({
+    const designerPayload = {
       id: uid,
       full_name: fullName,
       email: email.trim().toLowerCase(),
@@ -505,11 +514,26 @@ app.post('/api/auth/register-designer', async (req, res) => {
       dob: dob || null,
       address: address || null,
       country: country || 'India',
+      upi_id: upiId ? upiId.trim() : null,
+      paypal_id: paypalId ? paypalId.trim() : null,
       status: 'active',
       designs_count: 0,
       total_earnings: 0,
       points: 0,
-    });
+    };
+
+    let { error: profileError } = await supabaseAdmin.from('designers').insert(designerPayload);
+
+    if (profileError && profileError.message && profileError.message.includes('column')) {
+      // Column might not exist in database schema; strip columns and append to address
+      delete designerPayload.upi_id;
+      delete designerPayload.paypal_id;
+      const payoutNote = isIndia ? `[UPI: ${upiId.trim()}]` : `[PayPal: ${paypalId.trim()}]`;
+      designerPayload.address = (designerPayload.address || '') ? `${designerPayload.address} | Payout: ${payoutNote}` : `Payout: ${payoutNote}`;
+      
+      const retry = await supabaseAdmin.from('designers').insert(designerPayload);
+      profileError = retry.error;
+    }
 
     if (profileError) {
       // Rollback auth user

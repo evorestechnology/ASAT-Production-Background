@@ -93,7 +93,7 @@ router.get('/withdrawals/all', verifyAuth, verifyAdmin, async (req, res) => {
 // POST /api/wallets/withdraw - Submit withdrawal request
 router.post('/withdraw', verifyAuth, resolveAnyRole, async (req, res) => {
   try {
-    const { amount } = req.body;
+    const { amount, paymentMethod, paymentId } = req.body;
     const amt = parseFloat(amount);
     if (!amt || amt <= 0) {
       return res.status(400).json({ error: 'Please enter a valid amount.' });
@@ -116,18 +116,34 @@ router.post('/withdraw', verifyAuth, resolveAnyRole, async (req, res) => {
 
     // Insert withdrawal request
     const username = req.roleData?.username || req.roleData?.business_name || req.user.email.split('@')[0];
-    const { data, error } = await supabaseAdmin
+    const withdrawalPayload = {
+      user_id: req.uid,
+      username,
+      role: req.role === 'mfg' ? 'mfg' : 'designer',
+      amount: amt,
+      status: 'pending',
+      payment_method: paymentMethod || null,
+      payment_id: paymentId || null,
+      created_at: new Date().toISOString()
+    };
+
+    let { data, error } = await supabaseAdmin
       .from('withdrawals')
-      .insert({
-        user_id: req.uid,
-        username,
-        role: req.role === 'mfg' ? 'mfg' : 'designer',
-        amount: amt,
-        status: 'pending',
-        created_at: new Date().toISOString()
-      })
+      .insert(withdrawalPayload)
       .select()
       .single();
+
+    if (error && error.message && error.message.includes('column')) {
+      delete withdrawalPayload.payment_method;
+      delete withdrawalPayload.payment_id;
+      const retry = await supabaseAdmin
+        .from('withdrawals')
+        .insert(withdrawalPayload)
+        .select()
+        .single();
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error) throw error;
     res.json({ success: true, withdrawal: data });
