@@ -153,7 +153,29 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Designer not found' });
     }
 
-    res.json(data);
+    // Compute designer rank from leaderboard
+    let rank = 1;
+    try {
+      const { data: rankings } = await supabaseAdmin
+        .from('designers')
+        .select('id, points, total_earnings')
+        .order('points', { ascending: false });
+
+      if (rankings && rankings.length > 0) {
+        const idx = rankings.findIndex(d => d.id === data.id);
+        if (idx !== -1) {
+          rank = idx + 1;
+        }
+      }
+    } catch (rErr) {
+      console.error('Error calculating rank:', rErr.message);
+    }
+
+    res.json({
+      ...data,
+      rank,
+      ranking: rank
+    });
   } catch (err) {
     console.error('Error fetching public designer profile:', err.message);
     res.status(500).json({ error: 'Failed to fetch designer' });

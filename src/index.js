@@ -32,6 +32,7 @@ import manufacturersRouter from './routes/manufacturers.js';
 import walletsRouter from './routes/wallets.js';
 import ticketsRouter from './routes/tickets.js';
 import settingsRouter from './routes/settings.js';
+import tutorialsRouter from './routes/tutorials.js';
 
 import printStylesRouter from './routes/print-styles.js';
 import usersRouter from './routes/users.js';
@@ -772,6 +773,7 @@ app.use('/api/dashboard', dashboardRouter);
 app.use('/api/activity', activityRouter);
 app.use('/api/currency', currencyRouter);
 app.use('/api/payment', paymentRouter);
+app.use('/api/tutorials', tutorialsRouter);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

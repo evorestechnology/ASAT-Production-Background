@@ -75,6 +75,15 @@ export async function verifyDesigner(req, res, next) {
     if (error || !data) {
       return res.status(403).json({ error: 'Designer access required' });
     }
+
+    if (data.status === 'blocked') {
+      return res.status(403).json({ error: 'Your designer account has been blocked by admin.', accountBlocked: true });
+    }
+
+    if (data.status === 'suspended' && ['POST', 'PUT', 'DELETE'].includes(req.method) && !req.path.includes('/me')) {
+      return res.status(403).json({ error: 'Your designer account is currently suspended. Actions are restricted.', accountSuspended: true });
+    }
+
     req.designerData = data;
     req.role = 'designer';
     next();
@@ -96,6 +105,15 @@ export async function verifyMfg(req, res, next) {
     if (error || !data) {
       return res.status(403).json({ error: 'Manufacturer access required' });
     }
+
+    if (data.status === 'blocked') {
+      return res.status(403).json({ error: 'Your manufacturer account has been blocked by admin.', accountBlocked: true });
+    }
+
+    if (data.status === 'suspended' && ['POST', 'PUT', 'DELETE'].includes(req.method) && !req.path.includes('/me')) {
+      return res.status(403).json({ error: 'Your manufacturer account is currently suspended. Actions are restricted.', accountSuspended: true });
+    }
+
     req.mfgData = data;
     req.role = 'mfg';
     next();
@@ -140,6 +158,9 @@ export async function resolveAnyRole(req, res, next) {
     // Check designer
     const { data: designer } = await supabaseAdmin.from('designers').select('*').eq('id', uid).maybeSingle();
     if (designer) {
+      if (designer.status === 'blocked') {
+        return res.status(403).json({ error: 'Your designer account has been blocked by admin.', accountBlocked: true });
+      }
       req.role = 'designer';
       req.roleData = designer;
       return next();
@@ -147,6 +168,9 @@ export async function resolveAnyRole(req, res, next) {
     // Check mfg
     const { data: mfg } = await supabaseAdmin.from('manufacturers').select('*').eq('id', uid).maybeSingle();
     if (mfg) {
+      if (mfg.status === 'blocked') {
+        return res.status(403).json({ error: 'Your manufacturer account has been blocked by admin.', accountBlocked: true });
+      }
       req.role = 'mfg';
       req.roleData = mfg;
       return next();

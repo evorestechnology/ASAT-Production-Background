@@ -237,4 +237,63 @@ router.put('/withdrawals/:id', verifyAuth, verifyAdmin, async (req, res) => {
   }
 });
 
+// GET /api/wallets/sales-history - Get detailed history of sold designs for designer
+router.get('/sales-history', verifyAuth, resolveAnyRole, async (req, res) => {
+  try {
+    const designerId = req.uid;
+
+    const { data: orders, error } = await supabaseAdmin
+      .from('orders')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    const salesHistory = [];
+
+    (orders || []).forEach(order => {
+      const items = Array.isArray(order.items) ? order.items : [];
+      items.forEach(item => {
+        const isItemDesigner = (item.designerId && item.designerId === designerId) ||
+                               (!item.isMfgProduct && order.designer_id === designerId);
+
+        if (isItemDesigner) {
+          const qty = Number(item.qty) || 1;
+          const itemPrice = Number(item.price) || 0;
+          let royaltyPerItem = Number(item.designerRoyalty) || Number(item.designerCost) || 0;
+          if (!royaltyPerItem) {
+            royaltyPerItem = Math.round((Number(order.designer_earnings) || 0) / (items.length || 1) / qty);
+          }
+          const totalEarned = royaltyPerItem * qty;
+          const isDelivered = (order.status === 'completed' || order.status === 'delivered');
+
+          salesHistory.push({
+            id: `${order.id}_${item.id || item.name}`,
+            orderId: order.order_id || order.id,
+            designId: item.id || null,
+            title: item.name || 'Custom Design',
+            image: item.image || item.frontImage || item.coverImage || '',
+            size: item.size || 'Standard',
+            color: item.colorName || item.color || 'Standard',
+            quantity: qty,
+            customerName: order.customer_name || 'Customer',
+            country: order.country || 'India',
+            date: order.created_at,
+            status: order.status || 'pending',
+            royaltyPerItem: royaltyPerItem,
+            totalEarned: totalEarned,
+            isDelivered: isDelivered,
+            earningsStatus: isDelivered ? 'Credited to Wallet' : 'Pending Delivery'
+          });
+        }
+      });
+    });
+
+    res.json(salesHistory);
+  } catch (err) {
+    console.error('Error fetching sales history:', err.message);
+    res.status(500).json({ error: 'Failed to fetch sales history' });
+  }
+});
+
 export default router;

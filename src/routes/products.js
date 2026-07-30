@@ -1,6 +1,7 @@
 import express from 'express';
 import { supabaseAdmin } from '../supabaseAdmin.js';
 import { verifyAuth, verifyAdmin, verifyMfg, resolveAnyRole } from '../middleware/auth.js';
+import { updateAllDesignPricesForBaseProduct } from '../utils/priceCalculator.js';
 
 const router = express.Router();
 
@@ -17,14 +18,30 @@ router.get('/', async (req, res) => {
       query = query.eq('category', category);
     }
     if (gender) {
-      query = query.eq('gender', gender);
+      const g = gender.trim();
+      query = query.or(`gender.ilike.${g},gender.ilike.unisex`);
     }
 
     const { data, error } = await query.order('created_at', { ascending: false });
 
     if (error) throw error;
+
+    // Fetch manufacturer status map to filter out suspended or blocked manufacturers
+    const { data: mfgs } = await supabaseAdmin.from('manufacturers').select('id, status');
+    const inactiveMfgIds = new Set(
+      (mfgs || [])
+        .filter(m => m.status === 'suspended' || m.status === 'blocked' || m.status === 'restricted')
+        .map(m => m.id)
+    );
+
+    const activeProducts = (data || []).filter(p => {
+      if (p.mfg_id && inactiveMfgIds.has(p.mfg_id)) return false;
+      const details = Array.isArray(p.details) ? p.details : [];
+      return !details.includes('__DELETED__');
+    });
+
     res.set('Cache-Control', 'no-store');
-    res.json(data || []);
+    res.json(activeProducts);
   } catch (err) {
     console.error('Error fetching available products:', err.message);
     res.status(500).json({ error: 'Failed to fetch products' });
@@ -199,6 +216,14 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
       .single();
 
     if (updateErr) throw updateErr;
+
+    // Recalculate prices of all designs linked to this base product
+    if (cost !== undefined || printing_styles !== undefined) {
+      updateAllDesignPricesForBaseProduct(id, updated).catch(err => {
+        console.error(`Error updating design prices for product ${id}:`, err.message);
+      });
+    }
+
     res.json({ success: true, product: updated });
   } catch (err) {
     console.error('Error updating product:', err.message);

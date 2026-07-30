@@ -292,13 +292,7 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // Update wallets
-    if (payload.designer_id && payload.designer_earnings) {
-      await updateWallet('designer', payload.designer_id, payload.designer_earnings);
-    }
-    if (payload.mfg_id && payload.mfg_earnings) {
-      await updateWallet('mfg', payload.mfg_id, payload.mfg_earnings);
-    }
+    // Wallet balance is NOT updated on order creation (only when status becomes completed/delivered)
 
     res.json({ success: true, order: data });
   } catch (err) {
@@ -372,11 +366,15 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
 
     if (error) throw error;
 
-    // Wallet balance credits/deductions
+    // Wallet balance credits/deductions (only credited when order status is completed or delivered)
     const oldStatus = order.status;
     const newStatus = updatedOrder.status;
 
-    if (oldStatus !== 'completed' && newStatus === 'completed') {
+    const isDone = (s) => s === 'completed' || s === 'delivered';
+    const wasDone = isDone(oldStatus);
+    const isNowDone = isDone(newStatus);
+
+    if (!wasDone && isNowDone) {
       // Credit Manufacturer Wallet
       if (updatedOrder.mfg_id && updatedOrder.mfg_earnings) {
         const { data: mfgWallet } = await supabaseAdmin
@@ -414,8 +412,8 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
             .eq('id', updatedOrder.designer_id);
         }
       }
-    } else if (oldStatus === 'completed' && newStatus !== 'completed') {
-      // Reverted from completed: Deduct Manufacturer Wallet
+    } else if (wasDone && !isNowDone) {
+      // Reverted from completed/delivered: Deduct Manufacturer Wallet
       if (updatedOrder.mfg_id && updatedOrder.mfg_earnings) {
         const { data: mfgWallet } = await supabaseAdmin
           .from('wallets')

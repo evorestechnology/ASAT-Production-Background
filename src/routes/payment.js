@@ -75,7 +75,7 @@ router.post('/create-order', optionalAuth, async (req, res) => {
       success: true,
       payment_session_id: data.payment_session_id,
       order_id: data.order_id,
-      cfEnv: process.env.CASHFREE_ENV || 'PRODUCTION'
+      cfEnv: (process.env.CASHFREE_ENV || 'PRODUCTION').toUpperCase()
     });
   } catch (err) {
     console.error('Error in Cashfree order creation:', err.message);

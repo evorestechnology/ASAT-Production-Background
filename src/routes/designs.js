@@ -1,6 +1,7 @@
 import express from 'express';
 import { supabaseAdmin } from '../supabaseAdmin.js';
 import { verifyAuth, verifyDesigner, verifyAdmin, resolveAnyRole } from '../middleware/auth.js';
+import { syncDesignPriceWithBaseProduct } from '../utils/priceCalculator.js';
 
 const router = express.Router();
 
@@ -20,7 +21,7 @@ router.get('/', async (req, res) => {
     const { designerId, sort, limit } = req.query;
     let query = supabaseAdmin
       .from('designs')
-      .select('*, products:base_product_id(category, available, details), catalogue:catalogue_item_id(category)')
+      .select('*, products:base_product_id(cost, printing_styles, category, available, details), catalogue:catalogue_item_id(category)')
       .in('status', ['approved', 'active']);
 
     if (designerId) {
@@ -40,15 +41,25 @@ router.get('/', async (req, res) => {
     const { data, error } = await dbQuery;
     if (error) throw error;
 
-    const activeDesigns = (data || []).filter(d => {
-      // Exclude designs hidden by the designer
-      if (isDesignHidden(d)) return false;
-      if (d.products) {
-        const details = Array.isArray(d.products.details) ? d.products.details : [];
-        return d.products.available !== false && !details.includes('__DELETED__');
-      }
-      return true;
-    });
+    // Fetch designer status map to filter out suspended or blocked designers
+    const { data: designers } = await supabaseAdmin.from('designers').select('id, status');
+    const inactiveDesignerIds = new Set(
+      (designers || [])
+        .filter(d => d.status === 'suspended' || d.status === 'blocked' || d.status === 'restricted')
+        .map(d => d.id)
+    );
+
+    const activeDesigns = (data || [])
+      .filter(d => {
+        if (inactiveDesignerIds.has(d.designer_id)) return false;
+        if (isDesignHidden(d)) return false;
+        if (d.products) {
+          const details = Array.isArray(d.products.details) ? d.products.details : [];
+          return d.products.available !== false && !details.includes('__DELETED__');
+        }
+        return true;
+      })
+      .map(d => syncDesignPriceWithBaseProduct(d));
 
     res.json(activeDesigns);
   } catch (err) {
@@ -98,7 +109,7 @@ router.get('/:id', async (req, res) => {
     console.log(`[DEBUG] Executing Supabase query: from('designs').select('*, designers:designer_id(full_name, username)').eq('id', '${id}').single()`);
     const { data, error } = await supabaseAdmin
       .from('designs')
-      .select('*, designers:designer_id(full_name, username), products:base_product_id(available, details)')
+      .select('*, designers:designer_id(full_name, username), products:base_product_id(cost, printing_styles, available, details)')
       .eq('id', id)
       .single();
 
@@ -163,7 +174,8 @@ router.get('/:id', async (req, res) => {
     }
 
     console.log(`[DEBUG] Supabase query success for design ${id}`);
-    res.json(data);
+    const synced = syncDesignPriceWithBaseProduct(data);
+    res.json(synced);
   } catch (err) {
     console.error(`[DEBUG] Exception in GET /api/designs/:id:`, err.stack);
     res.status(500).json({ error: 'Failed to fetch design details' });

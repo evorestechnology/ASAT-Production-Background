@@ -1,6 +1,7 @@
 import express from 'express';
 import { supabaseAdmin } from '../supabaseAdmin.js';
 import { verifyAuth, verifyMfg, resolveAnyRole } from '../middleware/auth.js';
+import { updateAllDesignPricesForBaseProduct } from '../utils/priceCalculator.js';
 
 const router = express.Router();
 
@@ -191,6 +192,24 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    // Recalculate prices for all products/designs belonging to this manufacturer
+    try {
+      const { data: mfgProducts } = await supabaseAdmin
+        .from('products')
+        .select('*')
+        .eq('mfg_id', original.mfg_id);
+
+      if (mfgProducts && mfgProducts.length > 0) {
+        for (const prod of mfgProducts) {
+          updateAllDesignPricesForBaseProduct(prod.id, prod).catch(pErr => {
+            console.error(`Error updating design prices for mfg product ${prod.id}:`, pErr.message);
+          });
+        }
+      }
+    } catch (syncErr) {
+      console.error('Error syncing design prices on print style update:', syncErr.message);
+    }
 
     const formatted = {
       ...data,
