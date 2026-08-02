@@ -34,14 +34,14 @@ export function syncDesignPriceWithBaseProduct(design) {
           const techKey = placement.technique || placement.style || '';
           const placementId = placement.placementId || placement.id || placement.label || '';
 
-          const ps = printingStyles.find(x => 
-            (x.style && x.style.toLowerCase() === techKey.toLowerCase()) || 
+          const ps = printingStyles.find(x =>
+            (x.style && x.style.toLowerCase() === techKey.toLowerCase()) ||
             (x.name && x.name.toLowerCase() === techKey.toLowerCase()) ||
             (x.id && x.id === techKey)
           );
           if (ps) {
-            const pl = (ps.placements || []).find(p => 
-              (p.id && String(p.id).toLowerCase() === String(placementId).toLowerCase()) || 
+            const pl = (ps.placements || []).find(p =>
+              (p.id && String(p.id).toLowerCase() === String(placementId).toLowerCase()) ||
               (p.label && String(p.label).toLowerCase() === String(placementId).toLowerCase()) ||
               (p.name && String(p.name).toLowerCase() === String(placementId).toLowerCase())
             );
@@ -113,4 +113,88 @@ export async function updateAllDesignPricesForBaseProduct(baseProductId, updated
   } catch (err) {
     console.error('Error in updateAllDesignPricesForBaseProduct:', err.message);
   }
+}
+
+/**
+ * When a print style's cost/placements change, this function:
+ * 1. Finds all products that reference this print style (by id or name) in their printing_styles JSON snapshot.
+ * 2. Updates the cost/placements snapshot inside each product's printing_styles array.
+ * 3. Re-saves the product row with the fresh snapshot.
+ * 4. Triggers updateAllDesignPricesForBaseProduct for each affected product so designs get repriced.
+ *
+ * @param {string} printStyleId   - The UUID of the changed print_style row.
+ * @param {object} updatedStyle   - The full updated print_style object (from the DB after update).
+ */
+export async function propagatePrintStyleCostToProducts(printStyleId, updatedStyle) {
+  if (!printStyleId || !updatedStyle) return;
+
+  // Parse the new description to extract cost & placements
+  let newDesc = {};
+  try {
+    newDesc = typeof updatedStyle.description === 'string'
+      ? JSON.parse(updatedStyle.description)
+      : (updatedStyle.description || {});
+  } catch (e) {
+    newDesc = {};
+  }
+  const newCost = Number(newDesc.cost) || 0;
+  const newPlacements = newDesc.placements || newDesc.placementCategories || [];
+
+  // Fetch all products belonging to this manufacturer
+  const { data: products, error: prodErr } = await supabaseAdmin
+    .from('products')
+    .select('*')
+    .eq('mfg_id', updatedStyle.mfg_id);
+
+  if (prodErr || !products || products.length === 0) {
+    console.log(`[PrintStyle Propagate] No products found for mfg_id=${updatedStyle.mfg_id}`);
+    return;
+  }
+
+  let affectedCount = 0;
+
+  for (const product of products) {
+    const printingStyles = Array.isArray(product.printing_styles) ? product.printing_styles : [];
+
+    // Check if this product references the changed print style
+    const styleIndex = printingStyles.findIndex(ps =>
+      ps.id === printStyleId ||
+      ps.style_id === printStyleId ||
+      (ps.name && updatedStyle.name && ps.name.toLowerCase() === updatedStyle.name.toLowerCase())
+    );
+
+    if (styleIndex === -1) continue; // product doesn't use this print style
+
+    // Update the snapshot: patch cost and placements in the product's printing_styles array
+    const updatedPrintingStyles = [...printingStyles];
+    updatedPrintingStyles[styleIndex] = {
+      ...updatedPrintingStyles[styleIndex],
+      cost: newCost,
+      placements: newPlacements.length > 0 ? newPlacements : updatedPrintingStyles[styleIndex].placements,
+    };
+
+    // Save the updated snapshot back to the product
+    const { data: savedProduct, error: saveErr } = await supabaseAdmin
+      .from('products')
+      .update({
+        printing_styles: updatedPrintingStyles,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', product.id)
+      .select()
+      .single();
+
+    if (saveErr) {
+      console.error(`[PrintStyle Propagate] Failed to update product ${product.id}:`, saveErr.message);
+      continue;
+    }
+
+    console.log(`[PrintStyle Propagate] Updated printing_styles snapshot in product ${product.id} (${product.title})`);
+    affectedCount++;
+
+    // Now recalculate all design prices that use this product
+    await updateAllDesignPricesForBaseProduct(product.id, savedProduct);
+  }
+
+  console.log(`[PrintStyle Propagate] Propagated print style "${updatedStyle.name}" cost change to ${affectedCount} product(s).`);
 }

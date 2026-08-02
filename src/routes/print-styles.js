@@ -1,7 +1,7 @@
 import express from 'express';
 import { supabaseAdmin } from '../supabaseAdmin.js';
 import { verifyAuth, verifyMfg, resolveAnyRole } from '../middleware/auth.js';
-import { updateAllDesignPricesForBaseProduct } from '../utils/priceCalculator.js';
+import { updateAllDesignPricesForBaseProduct, propagatePrintStyleCostToProducts } from '../utils/priceCalculator.js';
 
 const router = express.Router();
 
@@ -84,6 +84,14 @@ router.post('/bulk', verifyAuth, verifyMfg, async (req, res) => {
         .select();
 
       if (insertError) throw insertError;
+
+      // Propagate updated costs to all products & designs for this manufacturer
+      for (const savedStyle of data) {
+        propagatePrintStyleCostToProducts(savedStyle.id, savedStyle).catch(e =>
+          console.error(`[Bulk Sync] Price propagation failed for style ${savedStyle.id}:`, e.message)
+        );
+      }
+
       return res.json({ success: true, count: data.length, styles: data });
     }
 
@@ -193,23 +201,10 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
 
     if (error) throw error;
 
-    // Recalculate prices for all products/designs belonging to this manufacturer
-    try {
-      const { data: mfgProducts } = await supabaseAdmin
-        .from('products')
-        .select('*')
-        .eq('mfg_id', original.mfg_id);
-
-      if (mfgProducts && mfgProducts.length > 0) {
-        for (const prod of mfgProducts) {
-          updateAllDesignPricesForBaseProduct(prod.id, prod).catch(pErr => {
-            console.error(`Error updating design prices for mfg product ${prod.id}:`, pErr.message);
-          });
-        }
-      }
-    } catch (syncErr) {
-      console.error('Error syncing design prices on print style update:', syncErr.message);
-    }
+    // Propagate updated cost to product snapshots, then recalculate all linked design prices
+    propagatePrintStyleCostToProducts(id, data).catch(syncErr =>
+      console.error('Error propagating print style cost to products:', syncErr.message)
+    );
 
     const formatted = {
       ...data,
