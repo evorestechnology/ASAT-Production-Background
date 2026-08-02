@@ -218,10 +218,10 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
     if (updateErr) throw updateErr;
 
     // Recalculate prices of all designs linked to this base product
-    if (cost !== undefined || printing_styles !== undefined) {
-      updateAllDesignPricesForBaseProduct(id, updated).catch(err => {
-        console.error(`Error updating design prices for product ${id}:`, err.message);
-      });
+    try {
+      await updateAllDesignPricesForBaseProduct(id, updated);
+    } catch (err) {
+      console.error(`Error updating design prices for product ${id}:`, err.message);
     }
 
     res.json({ success: true, product: updated });

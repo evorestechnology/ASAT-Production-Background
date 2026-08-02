@@ -14,9 +14,7 @@ export function syncDesignPriceWithBaseProduct(design) {
       desc = design.description;
     }
 
-    const pricing = desc.pricing;
-    if (!pricing) return design;
-
+    const pricing = desc.pricing || {};
     const baseProductCost = Number(design.products.cost) || 0;
     const designerCost = Number(pricing.designerCost) || 0;
     const markup = Number(pricing.markup) || 0;
@@ -34,19 +32,26 @@ export function syncDesignPriceWithBaseProduct(design) {
         let colorCost = 0;
         for (const placement of colorPlacements) {
           const techKey = placement.technique || placement.style || '';
-          const placementId = placement.placementId || placement.id || '';
+          const placementId = placement.placementId || placement.id || placement.label || '';
 
           const ps = printingStyles.find(x => 
             (x.style && x.style.toLowerCase() === techKey.toLowerCase()) || 
-            (x.name && x.name.toLowerCase() === techKey.toLowerCase())
+            (x.name && x.name.toLowerCase() === techKey.toLowerCase()) ||
+            (x.id && x.id === techKey)
           );
           if (ps) {
-            const pl = (ps.placements || []).find(p => p.id === placementId || p.label === placement.label);
+            const pl = (ps.placements || []).find(p => 
+              (p.id && String(p.id).toLowerCase() === String(placementId).toLowerCase()) || 
+              (p.label && String(p.label).toLowerCase() === String(placementId).toLowerCase()) ||
+              (p.name && String(p.name).toLowerCase() === String(placementId).toLowerCase())
+            );
             if (pl) {
-              colorCost += Number(pl.price || pl.cost || pl.cost_dark || pl.cost_light) || 0;
-            } else if (ps.cost) {
+              colorCost += Number(pl.price ?? pl.cost ?? pl.cost_dark ?? pl.cost_light ?? 0);
+            } else if (ps.cost !== undefined) {
               colorCost += Number(ps.cost) || 0;
             }
+          } else if (placement.price !== undefined || placement.cost !== undefined) {
+            colorCost += Number(placement.price || placement.cost) || 0;
           }
         }
         if (colorCost > maxColorPrintingCost) maxColorPrintingCost = colorCost;
@@ -59,11 +64,12 @@ export function syncDesignPriceWithBaseProduct(design) {
     const calculatedPrice = baseProductCost + printingCost + designerCost + markup;
     if (calculatedPrice > 0) {
       design.price = calculatedPrice;
-      if (desc.pricing) {
-        desc.pricing.baseCost = baseProductCost;
-        desc.pricing.printingCost = printingCost;
-        design.description = typeof design.description === 'string' ? JSON.stringify(desc) : desc;
-      }
+      if (!desc.pricing) desc.pricing = {};
+      desc.pricing.baseCost = baseProductCost;
+      desc.pricing.printingCost = printingCost;
+      desc.pricing.designerCost = designerCost;
+      desc.pricing.totalPrice = calculatedPrice;
+      design.description = typeof design.description === 'string' ? JSON.stringify(desc) : desc;
     }
   } catch (err) {
     console.error('Error syncing design price:', err.message);
@@ -87,7 +93,7 @@ export async function updateAllDesignPricesForBaseProduct(baseProductId, updated
     for (const design of designs) {
       try {
         const synced = syncDesignPriceWithBaseProduct({ ...design, products: updatedProduct });
-        if (synced && synced.price !== design.price) {
+        if (synced) {
           const descStr = typeof synced.description === 'string' ? synced.description : JSON.stringify(synced.description);
           await supabaseAdmin
             .from('designs')

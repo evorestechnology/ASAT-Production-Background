@@ -1,6 +1,7 @@
 import express from 'express';
 import { supabaseAdmin } from '../supabaseAdmin.js';
 import { verifyAuth, resolveAnyRole } from '../middleware/auth.js';
+import { sendOrderCancellationEmail } from '../utils/mailer.js';
 
 const router = express.Router();
 
@@ -305,7 +306,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, tracking_id, mfg_id } = req.body;
+    const { status, tracking_id, shipping_partner, mfg_id, cant_be_done_reason, termination_reason } = req.body;
 
     const { data: order, error: fetchError } = await supabaseAdmin
       .from('orders')
@@ -321,10 +322,23 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
       updated_at: new Date().toISOString()
     };
 
+    // Format tracking_id if shipping_partner is provided
+    let finalTrackingId = tracking_id;
+    if (shipping_partner) {
+      const code = tracking_id ? tracking_id.replace(/^\[[^\]]+\]\s*/, '') : '';
+      finalTrackingId = `[${shipping_partner.trim()}] ${code}`.trim();
+    }
+
+    // If manufacturer reported "Can't Be Done" or status requested is issue_reported, mark as cancelled and send email
+    let finalStatus = status;
+    if (req.role === 'mfg' && (cant_be_done_reason || status === 'issue_reported' || status === 'cant_be_done')) {
+      finalStatus = 'cancelled';
+    }
+
     // Determine authorization and assign values
     if (req.role === 'admin') {
-      if (status !== undefined) payload.status = status;
-      if (tracking_id !== undefined) payload.tracking_id = tracking_id;
+      if (finalStatus !== undefined) payload.status = finalStatus;
+      if (finalTrackingId !== undefined) payload.tracking_id = finalTrackingId;
       if (mfg_id !== undefined) payload.mfg_id = mfg_id;
     } else if (req.role === 'mfg') {
       // Manufacturer can assign to self if unassigned, or update status/tracking if assigned
@@ -339,20 +353,31 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
 
       payload.mfg_id = req.uid; // Set/Ensure it's assigned to this mfg
       
-      if (status !== undefined) payload.status = status;
-      if (tracking_id !== undefined) payload.tracking_id = tracking_id;
+      if (finalStatus !== undefined) payload.status = finalStatus;
+      if (finalTrackingId !== undefined) payload.tracking_id = finalTrackingId;
     } else {
       return res.status(403).json({ error: 'Unauthorized to update order.' });
     }
 
-    // Append to status history if status changed
-    if (status && status !== order.status) {
+    // Append to status history if status changed or issue reported / terminated
+    if ((finalStatus && finalStatus !== order.status) || cant_be_done_reason || termination_reason) {
       const history = Array.isArray(order.status_history) ? order.status_history : [];
-      payload.status_history = [...history, { status, time: new Date().toISOString() }];
+      const historyEntry = { 
+        status: finalStatus || order.status, 
+        time: new Date().toISOString()
+      };
+      if (cant_be_done_reason) historyEntry.cant_be_done_reason = cant_be_done_reason;
+      if (termination_reason) historyEntry.termination_reason = termination_reason;
+      if (shipping_partner) historyEntry.shipping_partner = shipping_partner;
+
+      payload.status_history = [...history, historyEntry];
       
-      if (status === 'completed') {
+      if (finalStatus === 'completed' || finalStatus === 'delivered') {
         payload.completed_at = new Date().toISOString();
-      } else if (status === 'shipping') {
+        if (!order.delivered_at) {
+          payload.delivered_at = new Date().toISOString();
+        }
+      } else if (finalStatus === 'shipping') {
         payload.shipped_at = new Date().toISOString();
       }
     }
@@ -365,6 +390,30 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    // Send Cancellation Email to Customer if order became cancelled
+    if (updatedOrder.status === 'cancelled' && order.status !== 'cancelled') {
+      try {
+        let recipientEmail = order.contact || order.customer_email;
+        if (!recipientEmail && order.user_id) {
+          const { data: userData } = await supabaseAdmin
+            .from('users')
+            .select('email')
+            .eq('id', order.user_id)
+            .single();
+          if (userData && userData.email) {
+            recipientEmail = userData.email;
+          }
+        }
+        if (recipientEmail) {
+          const reasonText = cant_be_done_reason || termination_reason || 'Manufacturing constraint';
+          const orderNum = updatedOrder.order_id || updatedOrder.id?.slice(0, 10).toUpperCase();
+          await sendOrderCancellationEmail(recipientEmail, orderNum, reasonText);
+        }
+      } catch (mailErr) {
+        console.error('Failed to trigger order cancellation email:', mailErr.message);
+      }
+    }
 
     // Wallet balance credits/deductions (only credited when order status is completed or delivered)
     const oldStatus = order.status;
@@ -456,6 +505,153 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
   } catch (err) {
     console.error('Error updating order:', err.message);
     res.status(500).json({ error: 'Failed to update order' });
+  }
+});
+
+// Manufacturer requests cost adjustment (extra amount)
+router.post('/:id/cost-adjustment', verifyAuth, resolveAnyRole, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, reason } = req.body;
+
+    if (req.role !== 'mfg' && req.role !== 'admin') {
+      return res.status(403).json({ error: 'Only manufacturers can request cost adjustments.' });
+    }
+
+    const numAmount = Number(amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      return res.status(400).json({ error: 'Please enter a valid extra cost amount.' });
+    }
+
+    const { data: order, error: fetchErr } = await supabaseAdmin
+      .from('orders')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (fetchErr || !order) {
+      return res.status(404).json({ error: 'Order not found.' });
+    }
+
+    const history = Array.isArray(order.status_history) ? order.status_history : [];
+    const historyEntry = {
+      type: 'cost_adjustment_request',
+      amount: numAmount,
+      reason: reason || 'Manufacturer cost adjustment',
+      time: new Date().toISOString()
+    };
+
+    const payload = {
+      cost_adjustment_status: 'requested',
+      cost_adjustment_amount: numAmount,
+      cost_adjustment_reason: reason || '',
+      status_history: [...history, historyEntry],
+      updated_at: new Date().toISOString()
+    };
+
+    const { data: updatedOrder, error: updateErr } = await supabaseAdmin
+      .from('orders')
+      .update(payload)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (updateErr) throw updateErr;
+
+    res.json({ success: true, order: updatedOrder });
+  } catch (err) {
+    console.error('Error submitting cost adjustment:', err.message);
+    res.status(500).json({ error: 'Failed to submit cost adjustment request.' });
+  }
+});
+
+// Master Admin accepts or rejects cost adjustment
+router.post('/:id/cost-adjustment/review', verifyAuth, resolveAnyRole, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { action, reject_reason } = req.body; // action: 'accept' | 'reject'
+
+    if (req.role !== 'admin') {
+      return res.status(403).json({ error: 'Only Master Admin can review cost adjustments.' });
+    }
+
+    const { data: order, error: fetchErr } = await supabaseAdmin
+      .from('orders')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (fetchErr || !order) {
+      return res.status(404).json({ error: 'Order not found.' });
+    }
+
+    if (!order.cost_adjustment_amount || order.cost_adjustment_status !== 'requested') {
+      return res.status(400).json({ error: 'No active cost adjustment request found for this order.' });
+    }
+
+    const adjAmount = Number(order.cost_adjustment_amount) || 0;
+    const history = Array.isArray(order.status_history) ? order.status_history : [];
+
+    if (action === 'accept') {
+      const newMfgEarnings = Number(order.mfg_earnings || 0) + adjAmount;
+      const historyEntry = {
+        type: 'cost_adjustment_approved',
+        amount: adjAmount,
+        time: new Date().toISOString()
+      };
+
+      const payload = {
+        cost_adjustment_status: 'approved',
+        mfg_earnings: newMfgEarnings,
+        status_history: [...history, historyEntry],
+        updated_at: new Date().toISOString()
+      };
+
+      const { data: updatedOrder, error: updateErr } = await supabaseAdmin
+        .from('orders')
+        .update(payload)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (updateErr) throw updateErr;
+
+      // Credit Manufacturer Wallet immediately with approved amount!
+      if (order.mfg_id && adjAmount > 0) {
+        await updateWallet('mfg', order.mfg_id, adjAmount);
+      }
+
+      return res.json({ success: true, message: `Cost adjustment of ₹${adjAmount} accepted and credited to manufacturer wallet.`, order: updatedOrder });
+    } else if (action === 'reject') {
+      const historyEntry = {
+        type: 'cost_adjustment_rejected',
+        amount: adjAmount,
+        reason: reject_reason || 'Rejected by Master Admin',
+        time: new Date().toISOString()
+      };
+
+      const payload = {
+        cost_adjustment_status: 'rejected',
+        status_history: [...history, historyEntry],
+        updated_at: new Date().toISOString()
+      };
+
+      const { data: updatedOrder, error: updateErr } = await supabaseAdmin
+        .from('orders')
+        .update(payload)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (updateErr) throw updateErr;
+
+      return res.json({ success: true, message: 'Cost adjustment request rejected. Manufacturer can re-request if needed.', order: updatedOrder });
+    } else {
+      return res.status(400).json({ error: 'Invalid action. Expected "accept" or "reject".' });
+    }
+  } catch (err) {
+    console.error('Error reviewing cost adjustment:', err.message);
+    res.status(500).json({ error: 'Failed to review cost adjustment.' });
   }
 });
 

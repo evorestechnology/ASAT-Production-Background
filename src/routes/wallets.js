@@ -4,9 +4,95 @@ import { verifyAuth, resolveAnyRole, verifyAdmin } from '../middleware/auth.js';
 
 const router = express.Router();
 
+// Helper to recalculate wallet balance with 36-hour delay rule after manufacturer delivery
+export const syncWalletBalance = async (userId) => {
+  try {
+    const { data: orders } = await supabaseAdmin
+      .from('orders')
+      .select('*');
+
+    let eligibleEarnings = 0;
+    const THIRTY_SIX_HOURS_MS = 36 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    (orders || []).forEach(order => {
+      const isDelivered = (order.status === 'completed' || order.status === 'delivered');
+      if (!isDelivered) return;
+
+      const delTimeStr = order.delivered_at || order.completed_at || order.updated_at || order.created_at;
+      const delTime = delTimeStr ? new Date(delTimeStr).getTime() : 0;
+      const is36HoursPassed = (now - delTime) >= THIRTY_SIX_HOURS_MS;
+
+      if (!is36HoursPassed) return; // Must be 36 hours after manufacturer marked as delivered
+
+      const items = Array.isArray(order.items) ? order.items : [];
+      items.forEach(item => {
+        const isItemDesigner = (item.designerId && item.designerId === userId) ||
+                               (!item.isMfgProduct && order.designer_id === userId);
+
+        if (isItemDesigner) {
+          const qty = Number(item.qty) || 1;
+          let royaltyPerItem = Number(item.designerRoyalty) || Number(item.designerCost) || 0;
+          if (!royaltyPerItem) {
+            royaltyPerItem = Math.round((Number(order.designer_earnings) || 0) / (items.length || 1) / qty);
+          }
+          eligibleEarnings += royaltyPerItem * qty;
+        }
+
+        const isItemMfg = (item.mfgId && item.mfgId === userId) || (order.mfg_id === userId);
+        if (isItemMfg) {
+          const mfgE = Number(order.mfg_earnings) || 0;
+          eligibleEarnings += mfgE;
+        }
+      });
+    });
+
+    // Get total withdrawals for this user
+    const { data: withdrawals } = await supabaseAdmin
+      .from('withdrawals')
+      .select('amount, status')
+      .eq('user_id', userId);
+
+    let totalWithdrawn = 0;
+    let pendingWithdrawals = 0;
+
+    (withdrawals || []).forEach(w => {
+      const amt = Number(w.amount) || 0;
+      if (w.status === 'approved' || w.status === 'completed') {
+        totalWithdrawn += amt;
+      } else if (w.status === 'pending') {
+        pendingWithdrawals += amt;
+      }
+    });
+
+    const calculatedBalance = Math.max(0, eligibleEarnings - totalWithdrawn - pendingWithdrawals);
+
+    const { data: updatedWallet } = await supabaseAdmin
+      .from('wallets')
+      .upsert({
+        id: userId,
+        balance: calculatedBalance,
+        total_earnings: eligibleEarnings,
+        total_withdrawn: totalWithdrawn
+      })
+      .select()
+      .single();
+
+    return updatedWallet;
+  } catch (err) {
+    console.error('Error syncing wallet balance:', err.message);
+    return null;
+  }
+};
+
 // GET /api/wallets/me - Get own wallet
 router.get('/me', verifyAuth, resolveAnyRole, async (req, res) => {
   try {
+    const updatedWallet = await syncWalletBalance(req.uid);
+    if (updatedWallet) {
+      return res.json(updatedWallet);
+    }
+
     const { data, error } = await supabaseAdmin
       .from('wallets')
       .select('*')
@@ -279,6 +365,7 @@ router.get('/sales-history', verifyAuth, resolveAnyRole, async (req, res) => {
             customerName: order.customer_name || 'Customer',
             country: order.country || 'India',
             date: order.created_at,
+            deliveredAt: isDelivered ? (order.delivered_at || order.updated_at || order.created_at) : null,
             status: order.status || 'pending',
             royaltyPerItem: royaltyPerItem,
             totalEarned: totalEarned,
