@@ -617,11 +617,14 @@ router.post('/:id/cost-adjustment/review', verifyAuth, resolveAnyRole, async (re
       if (updateErr) throw updateErr;
 
       // Credit Manufacturer Wallet immediately with approved amount!
+      // Credit Manufacturer Wallet immediately with approved amount
       if (order.mfg_id && adjAmount > 0) {
         await updateWallet('mfg', order.mfg_id, adjAmount);
       }
+      // Update Master Admin Ledger/Wallet as well
+      await updateWallet('admin', req.uid || 'admin', adjAmount);
 
-      return res.json({ success: true, message: `Cost adjustment of ₹${adjAmount} accepted and credited to manufacturer wallet.`, order: updatedOrder });
+      return res.json({ success: true, message: `Cost adjustment of ₹${adjAmount} accepted! Manufacturer and Master wallets updated.`, order: updatedOrder });
     } else if (action === 'reject') {
       const historyEntry = {
         type: 'cost_adjustment_rejected',
@@ -652,6 +655,156 @@ router.post('/:id/cost-adjustment/review', verifyAuth, resolveAnyRole, async (re
   } catch (err) {
     console.error('Error reviewing cost adjustment:', err.message);
     res.status(500).json({ error: 'Failed to review cost adjustment.' });
+  }
+});
+
+// POST /api/orders/:id/customer-cancel - Customer cancels order within 36 hours
+router.post('/:id/customer-cancel', verifyAuth, resolveAnyRole, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    const { data: order, error: fetchErr } = await supabaseAdmin
+      .from('orders')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (fetchErr || !order) {
+      return res.status(404).json({ error: 'Order not found.' });
+    }
+
+    if (order.status === 'cancelled') {
+      return res.status(400).json({ error: 'Order is already cancelled.' });
+    }
+    if (order.status === 'completed' || order.status === 'delivered') {
+      return res.status(400).json({ error: 'Delivered orders cannot be cancelled.' });
+    }
+
+    // Check 36-hour window
+    const createdAt = new Date(order.created_at).getTime();
+    const now = Date.now();
+    const hoursElapsed = (now - createdAt) / (1000 * 60 * 60);
+
+    if (hoursElapsed > 36) {
+      return res.status(400).json({ error: 'Cancellation window (36 hours) has expired for this order.' });
+    }
+
+    const history = Array.isArray(order.status_history) ? order.status_history : [];
+    const historyEntry = {
+      status: 'cancelled',
+      cancelled_by: 'customer',
+      reason: reason || 'Customer requested cancellation within 36 hours',
+      time: new Date().toISOString()
+    };
+
+    const payload = {
+      status: 'cancelled',
+      status_history: [...history, historyEntry],
+      updated_at: new Date().toISOString()
+    };
+
+    const { data: updatedOrder, error: updateErr } = await supabaseAdmin
+      .from('orders')
+      .update(payload)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (updateErr) throw updateErr;
+
+    // Send confirmation email to customer
+    try {
+      let recipientEmail = order.contact || order.customer_email;
+      if (!recipientEmail && order.user_id) {
+        const { data: userData } = await supabaseAdmin
+          .from('users')
+          .select('email')
+          .eq('id', order.user_id)
+          .single();
+        if (userData && userData.email) recipientEmail = userData.email;
+      }
+      if (recipientEmail) {
+        const orderNum = updatedOrder.order_id || updatedOrder.id?.slice(0, 10).toUpperCase();
+        await sendOrderCancellationEmail(recipientEmail, orderNum, 'Cancelled by customer within 36 hours');
+      }
+    } catch (mailErr) {
+      console.error('Failed to send customer cancellation email:', mailErr);
+    }
+
+    res.json({ success: true, message: 'Order cancelled successfully. Refund will be processed within 48 hours.', order: updatedOrder });
+  } catch (err) {
+    console.error('Error handling customer cancellation:', err.message);
+    res.status(500).json({ error: 'Failed to cancel order.' });
+  }
+});
+
+// POST /api/orders/:id/approve-cancellation - Master Admin approves manufacturer cancellation report
+router.post('/:id/approve-cancellation', verifyAuth, resolveAnyRole, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    if (req.role !== 'admin') {
+      return res.status(403).json({ error: 'Only Master Admin can approve cancellation requests.' });
+    }
+
+    const { data: order, error: fetchErr } = await supabaseAdmin
+      .from('orders')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (fetchErr || !order) {
+      return res.status(404).json({ error: 'Order not found.' });
+    }
+
+    const history = Array.isArray(order.status_history) ? order.status_history : [];
+    const historyEntry = {
+      status: 'cancelled',
+      approved_by: 'master',
+      reason: reason || 'Master approved manufacturer cancellation request',
+      time: new Date().toISOString()
+    };
+
+    const payload = {
+      status: 'cancelled',
+      status_history: [...history, historyEntry],
+      updated_at: new Date().toISOString()
+    };
+
+    const { data: updatedOrder, error: updateErr } = await supabaseAdmin
+      .from('orders')
+      .update(payload)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (updateErr) throw updateErr;
+
+    // Send Cancellation Email to Customer
+    try {
+      let recipientEmail = order.contact || order.customer_email;
+      if (!recipientEmail && order.user_id) {
+        const { data: userData } = await supabaseAdmin
+          .from('users')
+          .select('email')
+          .eq('id', order.user_id)
+          .single();
+        if (userData && userData.email) recipientEmail = userData.email;
+      }
+      if (recipientEmail) {
+        const orderNum = updatedOrder.order_id || updatedOrder.id?.slice(0, 10).toUpperCase();
+        await sendOrderCancellationEmail(recipientEmail, orderNum, reason || 'Manufacturing constraint');
+      }
+    } catch (mailErr) {
+      console.error('Failed to send cancellation email:', mailErr);
+    }
+
+    res.json({ success: true, message: 'Cancellation approved. Customer notified and refund initiated within 48 hours.', order: updatedOrder });
+  } catch (err) {
+    console.error('Error approving cancellation:', err.message);
+    res.status(500).json({ error: 'Failed to approve cancellation.' });
   }
 });
 
