@@ -1,7 +1,7 @@
 import express from 'express';
 import { supabaseAdmin } from '../supabaseAdmin.js';
 import { verifyAuth, verifyAdmin, verifyMfg, resolveAnyRole } from '../middleware/auth.js';
-import { updateAllDesignPricesForBaseProduct } from '../utils/priceCalculator.js';
+import { updateAllDesignPricesForBaseProduct, enrichProductsWithLivePrintStyles } from '../utils/priceCalculator.js';
 
 const router = express.Router();
 
@@ -40,8 +40,10 @@ router.get('/', async (req, res) => {
       return !details.includes('__DELETED__');
     });
 
+    const enrichedProducts = await enrichProductsWithLivePrintStyles(activeProducts);
+
     res.set('Cache-Control', 'no-store');
-    res.json(activeProducts);
+    res.json(enrichedProducts);
   } catch (err) {
     console.error('Error fetching available products:', err.message);
     res.status(500).json({ error: 'Failed to fetch products' });
@@ -62,8 +64,11 @@ router.get('/mfg', verifyAuth, verifyMfg, async (req, res) => {
       const details = Array.isArray(p.details) ? p.details : [];
       return !details.includes('__DELETED__');
     });
+
+    const enrichedProducts = await enrichProductsWithLivePrintStyles(activeProducts);
+
     res.set('Cache-Control', 'no-store');
-    res.json(activeProducts);
+    res.json(enrichedProducts);
   } catch (err) {
     console.error('Error fetching manufacturer products:', err.message);
     res.status(500).json({ error: 'Failed to fetch products' });
@@ -94,8 +99,11 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Product not found' });
     }
     console.log(`[DEBUG] Supabase query success for product ${id}`);
+
+    const [enriched] = await enrichProductsWithLivePrintStyles([data]);
+
     res.set('Cache-Control', 'no-store');
-    res.json(data);
+    res.json(enriched || data);
   } catch (err) {
     console.error(`[DEBUG] Exception in GET /api/products/:id:`, err.stack);
     res.status(500).json({ error: 'Failed to fetch product details' });

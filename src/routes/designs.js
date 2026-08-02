@@ -73,12 +73,13 @@ router.get('/mine', verifyAuth, verifyDesigner, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('designs')
-      .select('*, products:base_product_id(available, details)')
+      .select('*, products:base_product_id(cost, printing_styles, category, available, details)')
       .eq('designer_id', req.uid)
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    res.json(data || []);
+    const synced = (data || []).map(d => syncDesignPriceWithBaseProduct(d));
+    res.json(synced);
   } catch (err) {
     console.error('Error fetching my designs:', err.message);
     res.status(500).json({ error: 'Failed to fetch my designs' });

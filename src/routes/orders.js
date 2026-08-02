@@ -329,10 +329,11 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
       finalTrackingId = `[${shipping_partner.trim()}] ${code}`.trim();
     }
 
-    // If manufacturer reported "Can't Be Done" or status requested is issue_reported, mark as cancelled and send email
+    // If manufacturer reported "Can't Be Done", keep status as 'issue_reported' (pending admin review)
+    // Admin will approve/reject via the separate /approve-cancellation endpoint
     let finalStatus = status;
-    if (req.role === 'mfg' && (cant_be_done_reason || status === 'issue_reported' || status === 'cant_be_done')) {
-      finalStatus = 'cancelled';
+    if (req.role === 'mfg' && (cant_be_done_reason || status === 'cant_be_done')) {
+      finalStatus = 'issue_reported';
     }
 
     // Determine authorization and assign values
