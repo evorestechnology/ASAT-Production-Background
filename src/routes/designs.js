@@ -195,7 +195,9 @@ router.post('/', verifyAuth, verifyDesigner, async (req, res) => {
       colors,
       sizes,
       gender,
-      collection
+      collection,
+      category,
+      tags
     } = req.body;
 
     if (!title || price === undefined) {
@@ -218,6 +220,8 @@ router.post('/', verifyAuth, verifyDesigner, async (req, res) => {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
+    if (category) designPayload.category = category;
+    if (tags) designPayload.tags = tags;
 
     const { data, error } = await supabaseAdmin
       .from('designs')
