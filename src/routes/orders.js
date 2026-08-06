@@ -559,6 +559,38 @@ router.post('/:id/cost-adjustment', verifyAuth, resolveAnyRole, async (req, res)
 
     if (updateErr) throw updateErr;
 
+    // Create a support ticket to transmit request to Master Tickets module as well
+    try {
+      const orderRef = order.order_id || order.id;
+      const { data: ticket } = await supabaseAdmin
+        .from('tickets')
+        .insert({
+          user_id: req.uid,
+          subject: `Cost Adjustment Request - Order #${orderRef}`,
+          category: 'Cost Adjustment Request',
+          order_id: orderRef,
+          status: 'open',
+          last_reply: 'user',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .select()
+        .single();
+
+      if (ticket) {
+        await supabaseAdmin
+          .from('ticket_messages')
+          .insert({
+            ticket_id: ticket.id,
+            sender_id: req.uid,
+            sender_role: 'mfg',
+            text: `Manufacturer requested a cost adjustment of ₹${numAmount} for Order #${orderRef}. Reason: ${reason || 'Manufacturing cost adjustment'}`
+          });
+      }
+    } catch (tErr) {
+      console.error('Failed to create ticket for cost adjustment:', tErr.message);
+    }
+
     res.json({ success: true, order: updatedOrder });
   } catch (err) {
     console.error('Error submitting cost adjustment:', err.message);
@@ -617,13 +649,37 @@ router.post('/:id/cost-adjustment/review', verifyAuth, resolveAnyRole, async (re
 
       if (updateErr) throw updateErr;
 
-      // Credit Manufacturer Wallet immediately with approved amount!
       // Credit Manufacturer Wallet immediately with approved amount
       if (order.mfg_id && adjAmount > 0) {
         await updateWallet('mfg', order.mfg_id, adjAmount);
       }
       // Update Master Admin Ledger/Wallet as well
       await updateWallet('admin', req.uid || 'admin', adjAmount);
+
+      // Close open cost adjustment ticket if present
+      try {
+        const orderRef = order.order_id || order.id;
+        const { data: tickets } = await supabaseAdmin
+          .from('tickets')
+          .select('id')
+          .eq('order_id', orderRef)
+          .eq('category', 'Cost Adjustment Request')
+          .eq('status', 'open');
+        
+        if (tickets && tickets.length > 0) {
+          for (const t of tickets) {
+            await supabaseAdmin.from('tickets').update({ status: 'closed', updated_at: new Date().toISOString() }).eq('id', t.id);
+            await supabaseAdmin.from('ticket_messages').insert({
+              ticket_id: t.id,
+              sender_id: req.uid,
+              sender_role: 'admin',
+              text: `Cost adjustment request of ₹${adjAmount} has been APPROVED by Master Admin.`
+            });
+          }
+        }
+      } catch (tErr) {
+        console.error('Error closing cost adjustment ticket:', tErr.message);
+      }
 
       return res.json({ success: true, message: `Cost adjustment of ₹${adjAmount} accepted! Manufacturer and Master wallets updated.`, order: updatedOrder });
     } else if (action === 'reject') {
@@ -648,6 +704,31 @@ router.post('/:id/cost-adjustment/review', verifyAuth, resolveAnyRole, async (re
         .single();
 
       if (updateErr) throw updateErr;
+
+      // Close open cost adjustment ticket if present
+      try {
+        const orderRef = order.order_id || order.id;
+        const { data: tickets } = await supabaseAdmin
+          .from('tickets')
+          .select('id')
+          .eq('order_id', orderRef)
+          .eq('category', 'Cost Adjustment Request')
+          .eq('status', 'open');
+        
+        if (tickets && tickets.length > 0) {
+          for (const t of tickets) {
+            await supabaseAdmin.from('tickets').update({ status: 'closed', updated_at: new Date().toISOString() }).eq('id', t.id);
+            await supabaseAdmin.from('ticket_messages').insert({
+              ticket_id: t.id,
+              sender_id: req.uid,
+              sender_role: 'admin',
+              text: `Cost adjustment request of ₹${adjAmount} has been REJECTED by Master Admin. Reason: ${reject_reason || 'Rejected by Master Admin'}`
+            });
+          }
+        }
+      } catch (tErr) {
+        console.error('Error closing cost adjustment ticket:', tErr.message);
+      }
 
       return res.json({ success: true, message: 'Cost adjustment request rejected. Manufacturer can re-request if needed.', order: updatedOrder });
     } else {
