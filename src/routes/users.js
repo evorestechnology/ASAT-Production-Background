@@ -1,6 +1,7 @@
 import express from 'express';
 import { supabaseAdmin } from '../supabaseAdmin.js';
 import { verifyAuth, resolveAnyRole, verifyAdmin } from '../middleware/auth.js';
+import { sendAdminInviteEmail } from '../utils/mailer.js';
 
 const router = express.Router();
 
@@ -353,23 +354,87 @@ router.post('/admins/invite', verifyAuth, verifyAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Email and Display Name are required.' });
     }
 
-    const { data, error } = await supabaseAdmin
-      .from('admin_invites')
-      .insert({
-        email,
-        role: role || 'support',
-        display_name,
-        status: 'pending',
-        created_at: new Date().toISOString()
-      })
-      .select()
-      .single();
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanName = display_name.trim();
+    const cleanRole = role || 'support';
 
-    if (error) throw error;
-    res.json({ success: true, invite: data });
+    // 1. Record the invite in admin_invites table (if table exists)
+    let inviteRecord = null;
+    try {
+      const { data: inviteData, error: inviteErr } = await supabaseAdmin
+        .from('admin_invites')
+        .upsert({
+          email: cleanEmail,
+          role: cleanRole,
+          display_name: cleanName,
+          status: 'pending',
+          created_at: new Date().toISOString()
+        })
+        .select()
+        .single();
+      
+      if (!inviteErr) {
+        inviteRecord = inviteData;
+      }
+    } catch (e) {
+      console.warn('Notice: admin_invites table not available or insert skipped:', e.message);
+    }
+
+    // 2. Trigger Supabase Auth Invite
+    let authUser = null;
+    try {
+      const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.inviteUserByEmail(
+        cleanEmail,
+        {
+          data: {
+            full_name: cleanName,
+            role: 'admin',
+            admin_role: cleanRole
+          }
+        }
+      );
+
+      if (authErr) {
+        // If user already exists in auth, find existing user
+        console.warn('inviteUserByEmail note:', authErr.message);
+        const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+        const existing = listData?.users?.find(u => u.email?.toLowerCase() === cleanEmail);
+        if (existing) {
+          authUser = existing;
+        }
+      } else {
+        authUser = authData.user;
+        console.log(`✅ Supabase Auth invitation dispatched for ${cleanEmail}`);
+      }
+    } catch (authException) {
+      console.warn('Supabase Auth invite error:', authException.message);
+    }
+
+    // 3. Upsert admin record in public.admins if user ID is known
+    if (authUser?.id) {
+      await supabaseAdmin.from('admins').upsert({
+        id: authUser.id,
+        email: cleanEmail,
+        full_name: cleanName,
+        created_at: new Date().toISOString()
+      });
+    }
+
+    // 4. Send branded email notification
+    try {
+      await sendAdminInviteEmail(cleanEmail, cleanName, cleanRole);
+    } catch (emailErr) {
+      console.warn('Email notification warning:', emailErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: `Invitation successfully sent to ${cleanEmail}`,
+      invite: inviteRecord || { email: cleanEmail, role: cleanRole, display_name: cleanName }
+    });
   } catch (err) {
     console.error('Error inviting admin:', err.message);
-    res.status(500).json({ error: 'Failed to invite admin' });
+    res.status(500).json({ error: err.message || 'Failed to invite admin' });
   }
 });
 

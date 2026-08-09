@@ -33,8 +33,8 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 DO $$
 DECLARE
   new_uid UUID := gen_random_uuid();
-  admin_email TEXT := 'admin@asat.com';       -- <--- Change to desired admin email
-  admin_password TEXT := 'SecurePassword123'; -- <--- Change to desired admin password
+  admin_email TEXT := 'master@asat.com';       -- <--- Change to desired admin email
+  admin_password TEXT := 'MasterPassword123'; -- <--- Change to desired admin password
   admin_name TEXT := 'Master Admin';          -- <--- Change to admin name
 BEGIN
   -- 1. Insert into auth.users

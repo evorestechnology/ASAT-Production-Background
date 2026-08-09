@@ -23,80 +23,47 @@ SET session_replication_role = 'replica';
 
 
 -- ════════════════════════════════════════════════════════════════════
---  STEP 2: Truncate every application table (cascades handled by FK bypass)
+--  STEP 2: Safe-truncate every application table
+--  Uses information_schema to skip tables that don't exist yet.
 -- ════════════════════════════════════════════════════════════════════
 
-TRUNCATE TABLE
-  ticket_messages
-  RESTART IDENTITY CASCADE;
-
-TRUNCATE TABLE
-  tickets
-  RESTART IDENTITY CASCADE;
-
-TRUNCATE TABLE
-  withdrawals
-  RESTART IDENTITY CASCADE;
-
-TRUNCATE TABLE
-  wallets
-  RESTART IDENTITY CASCADE;
-
-TRUNCATE TABLE
-  orders
-  RESTART IDENTITY CASCADE;
-
-TRUNCATE TABLE
-  designs
-  RESTART IDENTITY CASCADE;
-
-TRUNCATE TABLE
-  print_styles
-  RESTART IDENTITY CASCADE;
-
-TRUNCATE TABLE
-  products
-  RESTART IDENTITY CASCADE;
-
-TRUNCATE TABLE
-  user_addresses
-  RESTART IDENTITY CASCADE;
-
-TRUNCATE TABLE
-  admin_invites
-  RESTART IDENTITY CASCADE;
-
-TRUNCATE TABLE
-  otps
-  RESTART IDENTITY CASCADE;
-
-TRUNCATE TABLE
-  catalogue
-  RESTART IDENTITY CASCADE;
-
-TRUNCATE TABLE
-  categories
-  RESTART IDENTITY CASCADE;
-
-TRUNCATE TABLE
-  manufacturers
-  RESTART IDENTITY CASCADE;
-
-TRUNCATE TABLE
-  designers
-  RESTART IDENTITY CASCADE;
-
-TRUNCATE TABLE
-  admins
-  RESTART IDENTITY CASCADE;
-
-TRUNCATE TABLE
-  users
-  RESTART IDENTITY CASCADE;
-
-TRUNCATE TABLE
-  settings
-  RESTART IDENTITY CASCADE;
+DO $$
+DECLARE
+  t TEXT;
+  tables_to_flush TEXT[] := ARRAY[
+    'ticket_messages',
+    'tickets',
+    'withdrawals',
+    'wallets',
+    'orders',
+    'designs',
+    'print_styles',
+    'products',
+    'user_addresses',
+    'admin_invites',
+    'otps',
+    'catalogue',
+    'categories',
+    'manufacturers',
+    'designers',
+    'admins',
+    'users',
+    'settings'
+  ];
+BEGIN
+  FOREACH t IN ARRAY tables_to_flush LOOP
+    IF EXISTS (
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema = 'public'
+        AND table_name = t
+    ) THEN
+      EXECUTE format('TRUNCATE TABLE %I RESTART IDENTITY CASCADE', t);
+      RAISE NOTICE 'Truncated: %', t;
+    ELSE
+      RAISE NOTICE 'Skipped (does not exist): %', t;
+    END IF;
+  END LOOP;
+END $$;
 
 
 -- ════════════════════════════════════════════════════════════════════
@@ -116,12 +83,25 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
 
 
 -- ════════════════════════════════════════════════════════════════════
---  STEP 5: Delete all uploaded storage files (asat-uploads bucket)
+--  STEP 5: Storage files — MUST be deleted via Supabase Dashboard
 --
---  Removes metadata rows + triggers blob deletion in Supabase storage.
---  If blobs remain: Dashboard > Storage > asat-uploads > Select All > Delete
+--  Supabase blocks direct SQL deletes on storage.objects via a trigger.
+--  To delete all uploaded files:
+--
+--    Option A (Dashboard - easiest):
+--      1. Go to: Supabase Dashboard > Storage > asat-uploads
+--      2. Click the three-dot menu > Empty Bucket
+--      (or Select All files and click Delete)
+--
+--    Option B (run flush_storage.js from your backend):
+--      node backend/sql/flush_storage.js
+--
 -- ════════════════════════════════════════════════════════════════════
-DELETE FROM storage.objects WHERE bucket_id = 'asat-uploads';
+DO $$
+BEGIN
+  RAISE NOTICE 'STEP 5: Storage files must be cleared via Supabase Dashboard or flush_storage.js';
+  RAISE NOTICE '  Dashboard > Storage > asat-uploads > Empty Bucket';
+END $$;
 
 
 -- ════════════════════════════════════════════════════════════════════
@@ -141,10 +121,10 @@ DELETE FROM auth.users;
 -- ════════════════════════════════════════════════════════════════════
 DO $$
 BEGIN
-  RAISE NOTICE 'ASAT full flush complete.';
+  RAISE NOTICE 'ASAT SQL flush complete.';
   RAISE NOTICE '  All application table rows deleted.';
-  RAISE NOTICE '  All storage files deleted (asat-uploads).';
-  RAISE NOTICE '  All auth.users deleted.';
   RAISE NOTICE '  Default settings row re-seeded.';
-  RAISE NOTICE '  Database is empty and ready for fresh use.';
+  RAISE NOTICE '  NEXT: Delete storage files via Dashboard > Storage > asat-uploads > Empty Bucket';
+  RAISE NOTICE '  NEXT: Delete auth users via Dashboard > Authentication > Users > Delete All';
+  RAISE NOTICE '  OR run: node backend/sql/flush_storage.js';
 END $$;

@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "flush-all": "node scripts/flush_all.js",
+    "add-admin": "node scripts/add_admin.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",

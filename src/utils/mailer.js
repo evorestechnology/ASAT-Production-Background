@@ -1,4 +1,11 @@
 import nodemailer from 'nodemailer';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.join(__dirname, '../../.env') });
 
 export function getMailTransporter() {
   const host = process.env.SMTP_HOST || 'smtp.gmail.com';
@@ -84,5 +91,69 @@ ASAT Team`,
     return info;
   } catch (err) {
     console.error(`[EMAIL ERROR] Failed to send email to ${customerEmail}:`, err.message);
+  }
+}
+
+/**
+ * Sends Admin Invitation email
+ */
+export async function sendAdminInviteEmail(adminEmail, displayName, role, inviteLink) {
+  if (!adminEmail) return;
+
+  const transporter = getMailTransporter();
+  const mailOptions = {
+    from: process.env.SMTP_FROM || process.env.SMTP_USER || '"ASAT Admin Portal" <noreply@as-simple-as-that.com>',
+    to: adminEmail.trim(),
+    subject: `You have been invited to join ASAT as an Admin (${role || 'Admin'})`,
+    text: `Hello ${displayName || 'Admin'},
+
+You have been invited to join the ASAT Administrative Portal with the role of "${role || 'Support Admin'}".
+
+You can access the Master Admin Portal here:
+${inviteLink || 'https://as-simple-as-that.com/master/login'}
+
+Best regards,
+ASAT Master Administration`,
+    html: `
+      <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; background: #ffffff;">
+        <div style="background: #121212; color: #C5A059; padding: 24px; text-align: center;">
+          <h2 style="margin: 0; font-family: 'Cinzel', serif; letter-spacing: 2px; color: #C5A059;">AS SIMPLE AS THAT</h2>
+          <p style="margin: 4px 0 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #888;">Administrative Access Invitation</p>
+        </div>
+        <div style="padding: 30px; color: #333; line-height: 1.6;">
+          <h3 style="color: #121212; margin-top: 0;">Welcome to the ASAT Admin Team</h3>
+          <p>Hello <strong>${displayName || 'Admin'}</strong>,</p>
+          <p>You have been invited to join the <strong>ASAT Master Portal</strong> as a <strong>${(role || 'support').toUpperCase()}</strong> administrator.</p>
+          
+          <div style="background: #fdfbf7; border: 1px solid rgba(197,160,89,0.3); padding: 20px; margin: 24px 0; border-radius: 6px; text-align: center;">
+            <p style="margin: 0 0 15px 0; font-size: 14px; color: #666;">Click the button below to access the admin portal and configure your account:</p>
+            <a href="${inviteLink || 'https://as-simple-as-that.com/master/login'}" style="background: #C5A059; color: #000; padding: 12px 28px; text-decoration: none; font-weight: bold; border-radius: 4px; display: inline-block; letter-spacing: 1px; font-size: 14px; text-transform: uppercase;">
+              Access Admin Portal
+            </a>
+          </div>
+
+          <p style="font-size: 13px; color: #777;">If you have any questions or did not expect this invitation, please contact the Master Admin.</p>
+          <p style="margin-top: 30px; font-size: 13px; color: #666;">Warm regards,<br/><strong>ASAT Master Team</strong></p>
+        </div>
+      </div>
+    `
+  };
+
+  if (!transporter) {
+    console.log(`\n======================================================`);
+    console.log(`[SIMULATED ADMIN INVITE EMAIL DISPATCH]`);
+    console.log(`TO: ${adminEmail}`);
+    console.log(`ROLE: ${role}`);
+    console.log(`LINK: ${inviteLink || '/master/login'}`);
+    console.log(`======================================================\n`);
+    return { simulated: true };
+  }
+
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`[EMAIL SENT] Successfully sent admin invite email to ${adminEmail} (Message ID: ${info.messageId})`);
+    return info;
+  } catch (err) {
+    console.error(`[EMAIL ERROR] Failed to send admin invite email to ${adminEmail}:`, err.message);
   }
 }
