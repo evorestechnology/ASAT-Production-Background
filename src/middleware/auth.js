@@ -54,6 +54,15 @@ export async function verifyAdmin(req, res, next) {
     if (error || !data) {
       return res.status(403).json({ error: 'Admin access required' });
     }
+
+    if (data.active === false || data.status === 'disabled' || data.status === 'blocked') {
+      return res.status(403).json({
+        error: 'Your administrator account has been disabled. Please contact the Master Admin.',
+        accountDisabled: true,
+        accountBlocked: true
+      });
+    }
+
     req.adminData = data;
     req.role = 'admin';
     next();
@@ -155,6 +164,13 @@ export async function resolveAnyRole(req, res, next) {
     // Check admin
     const { data: admin } = await supabaseAdmin.from('admins').select('*').eq('id', uid).maybeSingle();
     if (admin) {
+      if (admin.active === false || admin.status === 'disabled' || admin.status === 'blocked') {
+        return res.status(403).json({
+          error: 'Your administrator account has been disabled. Please contact the Master Admin.',
+          accountDisabled: true,
+          accountBlocked: true
+        });
+      }
       req.role = 'admin';
       req.roleData = admin;
       return next();

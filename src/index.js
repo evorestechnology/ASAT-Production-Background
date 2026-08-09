@@ -720,6 +720,16 @@ app.get('/api/auth/resolve-role', verifyAuth, async (req, res) => {
 
       if (data && !error) {
         // ── Status guard: block deleted / blocked accounts from resolving any role ──
+        if (table === 'admins') {
+          if (data.active === false || data.status === 'disabled' || data.status === 'blocked') {
+            return res.status(403).json({
+              error: 'Your administrator account has been disabled. Please contact the Master Admin.',
+              accountDisabled: true,
+              accountBlocked: true
+            });
+          }
+        }
+
         if (table === 'manufacturers') {
           if (data.status === 'deleted') {
             return res.status(403).json({
