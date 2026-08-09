@@ -110,7 +110,7 @@ export async function sendAdminInviteEmail(adminEmail, displayName, role, invite
 You have been invited to join the ASAT Administrative Portal with the role of "${role || 'Support Admin'}".
 
 You can access the Master Admin Portal here:
-${inviteLink || 'https://as-simple-as-that.com/master/login'}
+${inviteLink || 'https://asat-production-frontend.vercel.app//master/login'}
 
 Best regards,
 ASAT Master Administration`,
@@ -127,7 +127,7 @@ ASAT Master Administration`,
           
           <div style="background: #fdfbf7; border: 1px solid rgba(197,160,89,0.3); padding: 20px; margin: 24px 0; border-radius: 6px; text-align: center;">
             <p style="margin: 0 0 15px 0; font-size: 14px; color: #666;">Click the button below to access the admin portal and configure your account:</p>
-            <a href="${inviteLink || 'https://as-simple-as-that.com/master/login'}" style="background: #C5A059; color: #000; padding: 12px 28px; text-decoration: none; font-weight: bold; border-radius: 4px; display: inline-block; letter-spacing: 1px; font-size: 14px; text-transform: uppercase;">
+            <a href="${inviteLink || 'https://asat-production-frontend.vercel.app//master/login'}" style="background: #C5A059; color: #000; padding: 12px 28px; text-decoration: none; font-weight: bold; border-radius: 4px; display: inline-block; letter-spacing: 1px; font-size: 14px; text-transform: uppercase;">
               Access Admin Portal
             </a>
           </div>

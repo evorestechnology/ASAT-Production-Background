@@ -6,7 +6,7 @@ async function testEmail() {
     'ptejanvk@gmail.com',
     'Teja',
     'admin',
-    'https://as-simple-as-that.com/master/login'
+    'https://asat-production-frontend.vercel.app//master/login'
   );
   console.log('Result:', result);
 }
