@@ -1,7 +1,7 @@
 import express from 'express';
 import { supabaseAdmin } from '../supabaseAdmin.js';
 import { verifyAuth, verifyDesigner, verifyAdmin, resolveAnyRole } from '../middleware/auth.js';
-import { syncDesignPriceWithBaseProduct } from '../utils/priceCalculator.js';
+import { syncDesignPriceWithBaseProduct, isDesignConfigAvailable } from '../utils/priceCalculator.js';
 
 const router = express.Router();
 
@@ -21,7 +21,7 @@ router.get('/', async (req, res) => {
     const { designerId, sort, limit } = req.query;
     let query = supabaseAdmin
       .from('designs')
-      .select('*, products:base_product_id(cost, printing_styles, category, available, details), catalogue:catalogue_item_id(category)')
+      .select('*, products:base_product_id(cost, printing_styles, category, available, details, mfg_id), catalogue:catalogue_item_id(category)')
       .in('status', ['approved', 'active']);
 
     if (designerId) {
@@ -57,6 +57,21 @@ router.get('/', async (req, res) => {
         .map(m => m.id)
     );
 
+    // Fetch live manufacturer print styles to verify placement/style availability
+    const mfgIds = Array.from(new Set((data || []).map(d => d.products?.mfg_id).filter(Boolean)));
+    let mfgStyleMap = {};
+    if (mfgIds.length > 0) {
+      const { data: liveStyles } = await supabaseAdmin
+        .from('print_styles')
+        .select('*')
+        .in('mfg_id', mfgIds);
+
+      for (const st of (liveStyles || [])) {
+        if (!mfgStyleMap[st.mfg_id]) mfgStyleMap[st.mfg_id] = [];
+        mfgStyleMap[st.mfg_id].push(st);
+      }
+    }
+
     const activeDesigns = (data || [])
       .filter(d => {
         if (inactiveDesignerIds.has(d.designer_id)) return false;
@@ -67,6 +82,10 @@ router.get('/', async (req, res) => {
           // Also hide designs linked to a deleted/inactive manufacturer's product
           if (d.products.mfg_id && inactiveMfgIds.has(d.products.mfg_id)) return false;
         }
+        // Verify design required print styles and placement categories
+        const availCheck = isDesignConfigAvailable(d, mfgStyleMap);
+        if (!availCheck.available) return false;
+
         return true;
       })
       .map(d => syncDesignPriceWithBaseProduct(d));
@@ -120,7 +139,7 @@ router.get('/:id', async (req, res) => {
     console.log(`[DEBUG] Executing Supabase query: from('designs').select('*, designers:designer_id(full_name, username)').eq('id', '${id}').single()`);
     const { data, error } = await supabaseAdmin
       .from('designs')
-      .select('*, designers:designer_id(full_name, username), products:base_product_id(cost, printing_styles, available, details)')
+      .select('*, designers:designer_id(full_name, username), products:base_product_id(cost, printing_styles, available, details, mfg_id)')
       .eq('id', id)
       .single();
 
@@ -172,20 +191,35 @@ router.get('/:id', async (req, res) => {
     const isOwner = userRole === 'designer' && data.designer_id === userId;
 
     if (!isAdmin && !isMfg && !isOwner) {
-      if (data.products) {
-        const details = Array.isArray(data.products.details) ? data.products.details : [];
-        if (data.products.available === false || details.includes('__DELETED__')) {
-          return res.status(404).json({ error: 'Design unavailable' });
-        }
-      }
       // Block access if designer has hidden this design
       if (isDesignHidden(data)) {
         return res.status(404).json({ error: 'Design not found' });
       }
     }
 
+    // Fetch live manufacturer print styles to verify placement/style availability
+    let mfgStyleMap = {};
+    if (data.products?.mfg_id) {
+      const { data: liveStyles } = await supabaseAdmin
+        .from('print_styles')
+        .select('*')
+        .eq('mfg_id', data.products.mfg_id);
+
+      if (liveStyles && liveStyles.length > 0) {
+        mfgStyleMap[data.products.mfg_id] = liveStyles;
+      }
+    }
+
+    const availCheck = isDesignConfigAvailable(data, mfgStyleMap);
+
     console.log(`[DEBUG] Supabase query success for design ${id}`);
     const synced = syncDesignPriceWithBaseProduct(data);
+    synced.is_available = availCheck.available;
+    synced.unavailable_reason = availCheck.reason || '';
+    if (!availCheck.available) {
+      synced.available = false;
+    }
+
     res.json(synced);
   } catch (err) {
     console.error(`[DEBUG] Exception in GET /api/designs/:id:`, err.stack);
