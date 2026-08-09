@@ -1,9 +1,10 @@
 -- ═══════════════════════════════════════════════════════════════════
---  OPTIONAL: Add Profile Columns to admins Table
+--  OPTIONAL: Add Profile & Status Columns to admins Table
 --  Run in: Supabase Dashboard > SQL Editor > New Query
 -- ═══════════════════════════════════════════════════════════════════
 
 ALTER TABLE public.admins
+  ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT true,
   ADD COLUMN IF NOT EXISTS phone TEXT,
   ADD COLUMN IF NOT EXISTS address TEXT,
   ADD COLUMN IF NOT EXISTS country TEXT,

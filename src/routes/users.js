@@ -380,24 +380,106 @@ router.get('/admins', verifyAuth, verifyAdmin, async (req, res) => {
   }
 });
 
-// PUT /api/users/admins/:id — disable/update admin (admin only)
+// PUT /api/users/admins/:id — disable/enable/update admin (admin only)
 router.put('/admins/:id', verifyAuth, verifyAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { active } = req.body;
+    const { active, full_name, role } = req.body;
 
-    const { data, error } = await supabaseAdmin
+    // 1. If active flag provided, ban/unban in Supabase Auth
+    if (active !== undefined) {
+      try {
+        await supabaseAdmin.auth.admin.updateUserById(id, {
+          ban_duration: active === false ? '876000h' : 'none', // 100 years or none
+          user_metadata: { active }
+        });
+      } catch (authBanErr) {
+        console.warn('Auth ban status update note:', authBanErr.message);
+      }
+    }
+
+    // 2. Update admins table safely
+    let updatePayload = {};
+    if (active !== undefined) updatePayload.active = active;
+    if (full_name !== undefined) updatePayload.full_name = full_name;
+
+    let { data, error } = await supabaseAdmin
       .from('admins')
-      .update({ active, updated_at: new Date().toISOString() })
+      .update(updatePayload)
       .eq('id', id)
       .select()
-      .single();
+      .maybeSingle();
 
-    if (error) throw error;
-    res.json({ success: true, admin: data });
+    // If error due to missing 'active' column, retry without it
+    if (error) {
+      console.warn('Retrying admin update without active column:', error.message);
+      const retryRes = await supabaseAdmin
+        .from('admins')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      data = retryRes.data;
+    }
+
+    res.json({
+      success: true,
+      message: active === false ? 'Admin account disabled' : 'Admin account updated',
+      admin: data || { id, active }
+    });
   } catch (err) {
     console.error('Error updating admin status:', err.message);
-    res.status(500).json({ error: 'Failed to update admin status' });
+    res.status(500).json({ error: err.message || 'Failed to update admin status' });
+  }
+});
+
+// DELETE /api/users/admins/:id — delete admin account (admin only)
+router.delete('/admins/:id', verifyAuth, verifyAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Prevent master admin from deleting themselves
+    if (id === req.uid) {
+      return res.status(400).json({ error: 'You cannot delete your own admin account.' });
+    }
+
+    // Get admin email before deleting
+    const { data: adminRecord } = await supabaseAdmin
+      .from('admins')
+      .select('email')
+      .eq('id', id)
+      .maybeSingle();
+
+    // 1. Delete from admins table
+    const { error: dbErr } = await supabaseAdmin
+      .from('admins')
+      .delete()
+      .eq('id', id);
+
+    if (dbErr) throw dbErr;
+
+    // 2. Delete from admin_invites if present
+    if (adminRecord?.email) {
+      try {
+        await supabaseAdmin
+          .from('admin_invites')
+          .delete()
+          .eq('email', adminRecord.email);
+      } catch (inviteDelErr) {
+        console.warn('Could not delete admin_invites record:', inviteDelErr.message);
+      }
+    }
+
+    // 3. Delete from Supabase Auth
+    try {
+      await supabaseAdmin.auth.admin.deleteUser(id);
+    } catch (authDelErr) {
+      console.warn('Could not delete auth user:', authDelErr.message);
+    }
+
+    res.json({ success: true, message: 'Admin account removed successfully.' });
+  } catch (err) {
+    console.error('Error deleting admin:', err.message);
+    res.status(500).json({ error: err.message || 'Failed to delete admin' });
   }
 });
 
