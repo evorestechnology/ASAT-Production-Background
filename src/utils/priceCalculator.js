@@ -537,24 +537,12 @@ export function isDesignConfigAvailable(design, liveStylesMap = {}) {
         return { available: false, reason: `Printing style "${techKey.toUpperCase()}" is currently unavailable` };
       }
 
-      // Check placement in baseProduct printing_styles
-      if (ps && Array.isArray(ps.placements)) {
-        const pidClean = placementId.toLowerCase();
-        const pl = ps.placements.find(p => {
-          const pId = String(p.id || '').toLowerCase();
-          const pLabel = String(p.label || '').toLowerCase();
-          const pName = String(p.name || '').toLowerCase();
-          return pId === pidClean || pLabel === pidClean || pName === pidClean ||
-                 (pId && pidClean && (pId.endsWith('_' + pidClean) || pidClean.endsWith('_' + pId)));
-        });
-
-        if (pl && (pl.active === false || pl.available === false)) {
-          return { available: false, reason: `Placement position "${rawLabel || placementId}" is currently unavailable` };
-        }
-      }
-
-      // Check placement category & option in matchingLiveStyle
+      // Check live manufacturer print style first (live source of truth)
       if (matchingLiveStyle) {
+        if (matchingLiveStyle.active === false) {
+          return { available: false, reason: `Printing style "${techKey.toUpperCase()}" is currently unavailable` };
+        }
+
         let liveDesc = {};
         try { liveDesc = typeof matchingLiveStyle.description === 'string' ? JSON.parse(matchingLiveStyle.description) : (matchingLiveStyle.description || {}); } catch(e){}
         const placementCategories = Array.isArray(liveDesc.placementCategories) ? liveDesc.placementCategories : [];
@@ -578,13 +566,29 @@ export function isDesignConfigAvailable(design, liveStylesMap = {}) {
               const optItems = Array.isArray(opts) ? opts : Object.entries(opts).map(([k, v]) => ({ label: k, ...v }));
               for (const opt of optItems) {
                 const optNorm = (opt.label || opt.name || '').toLowerCase().trim().replace(/[\s_\-]/g, '');
-                if (optNorm && (optNorm === normPos || normPos.includes(optNorm) || optNorm.includes(normPos))) {
+                if (optNorm && (optNorm === normPos || normPos === optNorm || normPos.includes(optNorm) || optNorm.includes(normPos))) {
                   if (opt.available === false || opt.active === false) {
                     return { available: false, reason: `Placement position "${opt.label || opt.name}" is currently unavailable` };
                   }
                 }
               }
             }
+          }
+        }
+      } else {
+        // Fallback: check placement in baseProduct printing_styles if no live style found
+        if (ps && Array.isArray(ps.placements)) {
+          const pidClean = placementId.toLowerCase();
+          const pl = ps.placements.find(p => {
+            const pId = String(p.id || '').toLowerCase();
+            const pLabel = String(p.label || '').toLowerCase();
+            const pName = String(p.name || '').toLowerCase();
+            return pId === pidClean || pLabel === pidClean || pName === pidClean ||
+                   (pId && pidClean && (pId.endsWith('_' + pidClean) || pidClean.endsWith('_' + pId)));
+          });
+
+          if (pl && (pl.active === false || pl.available === false)) {
+            return { available: false, reason: `Placement position "${rawLabel || placementId}" is currently unavailable` };
           }
         }
       }
