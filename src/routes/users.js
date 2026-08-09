@@ -121,33 +121,64 @@ router.put('/me', verifyAuth, resolveAnyRole, async (req, res) => {
   try {
     const { full_name, phone, address, country, avatar_url } = req.body;
 
-    const updatePayload = {
-      updated_at: new Date().toISOString()
-    };
+    // Determine table based on role
+    const table = req.role === 'admin' ? 'admins' :
+                  req.role === 'designer' ? 'designers' :
+                  req.role === 'mfg' ? 'manufacturers' : 'users';
 
+    const updatePayload = {};
     if (full_name !== undefined) updatePayload.full_name = full_name;
     if (phone !== undefined) updatePayload.phone = phone;
     if (address !== undefined) updatePayload.address = address;
     if (country !== undefined) updatePayload.country = country;
     if (avatar_url !== undefined) updatePayload.avatar_url = avatar_url;
 
-    // Determine table based on role
-    const table = req.role === 'admin' ? 'admins' :
-                  req.role === 'designer' ? 'designers' :
-                  req.role === 'mfg' ? 'manufacturers' : 'users';
+    // Only add updated_at for tables that support it (designers, manufacturers, users)
+    if (table !== 'admins') {
+      updatePayload.updated_at = new Date().toISOString();
+    }
 
-    const { data, error } = await supabaseAdmin
+    let { data, error } = await supabaseAdmin
       .from(table)
       .update(updatePayload)
       .eq('id', req.uid)
       .select()
-      .single();
+      .maybeSingle();
+
+    // If there's an error because of unknown columns (e.g. phone/address/updated_at in admins table), retry with minimal payload
+    if (error && table === 'admins') {
+      console.warn('Retrying admin update with basic columns only:', error.message);
+      const safeAdminPayload = {};
+      if (full_name !== undefined) safeAdminPayload.full_name = full_name;
+
+      const retryRes = await supabaseAdmin
+        .from('admins')
+        .update(safeAdminPayload)
+        .eq('id', req.uid)
+        .select()
+        .maybeSingle();
+
+      data = retryRes.data;
+      error = retryRes.error;
+    }
 
     if (error) throw error;
-    res.json({ success: true, profile: data });
+
+    // Also keep Supabase Auth user_metadata in sync
+    if (full_name) {
+      try {
+        await supabaseAdmin.auth.admin.updateUserById(req.uid, {
+          user_metadata: { full_name }
+        });
+      } catch (metaErr) {
+        console.warn('Could not update user_metadata:', metaErr.message);
+      }
+    }
+
+    res.json({ success: true, profile: data || { id: req.uid, full_name, role: req.role } });
   } catch (err) {
     console.error('Error updating profile:', err.message);
-    res.status(500).json({ error: 'Failed to update profile' });
+    res.status(500).json({ error: err.message || 'Failed to update profile' });
   }
 });
 
