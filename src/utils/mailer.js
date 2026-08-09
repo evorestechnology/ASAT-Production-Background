@@ -95,22 +95,27 @@ ASAT Team`,
 }
 
 /**
- * Sends Admin Invitation email
+ * Sends Admin Invitation email with login credentials
  */
-export async function sendAdminInviteEmail(adminEmail, displayName, role, inviteLink) {
+export async function sendAdminInviteEmail(adminEmail, displayName, role, temporaryPassword, inviteLink) {
   if (!adminEmail) return;
 
+  const loginUrl = inviteLink || 'https://asat-production-frontend.vercel.app/master/login';
   const transporter = getMailTransporter();
   const mailOptions = {
     from: process.env.SMTP_FROM || process.env.SMTP_USER || '"ASAT Admin Portal" <noreply@as-simple-as-that.com>',
     to: adminEmail.trim(),
-    subject: `You have been invited to join ASAT as an Admin (${role || 'Admin'})`,
+    subject: `Welcome to ASAT Admin Team - Your Login Credentials (${role || 'Admin'})`,
     text: `Hello ${displayName || 'Admin'},
 
 You have been invited to join the ASAT Administrative Portal with the role of "${role || 'Support Admin'}".
 
-You can access the Master Admin Portal here:
-${inviteLink || 'https://asat-production-frontend.vercel.app//master/login'}
+Here are your login credentials:
+Portal URL: ${loginUrl}
+Email: ${adminEmail.trim()}
+Temporary Password: ${temporaryPassword || 'Admin@123456'}
+
+Please log in and update your password upon your first sign-in.
 
 Best regards,
 ASAT Master Administration`,
@@ -118,21 +123,28 @@ ASAT Master Administration`,
       <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; background: #ffffff;">
         <div style="background: #121212; color: #C5A059; padding: 24px; text-align: center;">
           <h2 style="margin: 0; font-family: 'Cinzel', serif; letter-spacing: 2px; color: #C5A059;">AS SIMPLE AS THAT</h2>
-          <p style="margin: 4px 0 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #888;">Administrative Access Invitation</p>
+          <p style="margin: 4px 0 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #888;">Administrative Access & Credentials</p>
         </div>
         <div style="padding: 30px; color: #333; line-height: 1.6;">
           <h3 style="color: #121212; margin-top: 0;">Welcome to the ASAT Admin Team</h3>
           <p>Hello <strong>${displayName || 'Admin'}</strong>,</p>
-          <p>You have been invited to join the <strong>ASAT Master Portal</strong> as a <strong>${(role || 'support').toUpperCase()}</strong> administrator.</p>
+          <p>You have been appointed to the <strong>ASAT Master Portal</strong> as a <strong>${(role || 'support').toUpperCase()}</strong> administrator.</p>
           
-          <div style="background: #fdfbf7; border: 1px solid rgba(197,160,89,0.3); padding: 20px; margin: 24px 0; border-radius: 6px; text-align: center;">
-            <p style="margin: 0 0 15px 0; font-size: 14px; color: #666;">Click the button below to access the admin portal and configure your account:</p>
-            <a href="${inviteLink || 'https://asat-production-frontend.vercel.app//master/login'}" style="background: #C5A059; color: #000; padding: 12px 28px; text-decoration: none; font-weight: bold; border-radius: 4px; display: inline-block; letter-spacing: 1px; font-size: 14px; text-transform: uppercase;">
-              Access Admin Portal
-            </a>
+          <div style="background: #fdfbf7; border: 1px solid rgba(197,160,89,0.3); padding: 20px; margin: 24px 0; border-radius: 6px;">
+            <p style="margin: 0 0 12px 0; font-size: 13px; font-weight: bold; color: #121212; text-transform: uppercase; letter-spacing: 1px;">Your Login Credentials:</p>
+            <div style="background: #ffffff; border: 1px solid #e5e5e5; border-radius: 4px; padding: 14px 18px; margin-bottom: 16px;">
+              <p style="margin: 0 0 8px 0; font-size: 14px;"><strong>Email:</strong> <span style="color: #4f46e5;">${adminEmail.trim()}</span></p>
+              <p style="margin: 0 0 8px 0; font-size: 14px;"><strong>Temporary Password:</strong> <code style="background: #f3f4f6; padding: 3px 8px; border-radius: 4px; font-size: 15px; color: #d97706; font-weight: bold;">${temporaryPassword || 'Admin@123456'}</code></p>
+              <p style="margin: 0; font-size: 14px;"><strong>Role:</strong> <span style="text-transform: capitalize;">${role || 'Support Admin'}</span></p>
+            </div>
+            <div style="text-align: center; margin-top: 20px;">
+              <a href="${loginUrl}" style="background: #C5A059; color: #000; padding: 12px 28px; text-decoration: none; font-weight: bold; border-radius: 4px; display: inline-block; letter-spacing: 1px; font-size: 14px; text-transform: uppercase;">
+                Sign In to Master Portal
+              </a>
+            </div>
           </div>
 
-          <p style="font-size: 13px; color: #777;">If you have any questions or did not expect this invitation, please contact the Master Admin.</p>
+          <p style="font-size: 13px; color: #777;">🔒 <em>For security purposes, please log in and change your password in the account settings after your first sign in.</em></p>
           <p style="margin-top: 30px; font-size: 13px; color: #666;">Warm regards,<br/><strong>ASAT Master Team</strong></p>
         </div>
       </div>
@@ -144,14 +156,15 @@ ASAT Master Administration`,
     console.log(`[SIMULATED ADMIN INVITE EMAIL DISPATCH]`);
     console.log(`TO: ${adminEmail}`);
     console.log(`ROLE: ${role}`);
-    console.log(`LINK: ${inviteLink || '/master/login'}`);
+    console.log(`PASS: ${temporaryPassword}`);
+    console.log(`LINK: ${loginUrl}`);
     console.log(`======================================================\n`);
     return { simulated: true };
   }
 
   try {
     const info = await transporter.sendMail(mailOptions);
-    console.log(`[EMAIL SENT] Successfully sent admin invite email to ${adminEmail} (Message ID: ${info.messageId})`);
+    console.log(`[EMAIL SENT] Successfully sent admin credentials email to ${adminEmail} (Message ID: ${info.messageId})`);
     return info;
   } catch (err) {
     console.error(`[EMAIL ERROR] Failed to send admin invite email to ${adminEmail}:`, err.message);

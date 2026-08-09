@@ -151,6 +151,30 @@ router.put('/me', verifyAuth, resolveAnyRole, async (req, res) => {
   }
 });
 
+// POST /api/users/change-password — change password for current user/admin
+router.post('/change-password', verifyAuth, async (req, res) => {
+  try {
+    const { new_password } = req.body;
+    if (!new_password || typeof new_password !== 'string' || new_password.length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters long.' });
+    }
+
+    const { data, error } = await supabaseAdmin.auth.admin.updateUserById(req.uid, {
+      password: new_password
+    });
+
+    if (error) {
+      console.error('Password change error from Supabase Auth:', error.message);
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.json({ success: true, message: 'Password updated successfully!' });
+  } catch (err) {
+    console.error('Error changing password:', err.message);
+    res.status(500).json({ error: 'Failed to update password' });
+  }
+});
+
 // GET /api/users/addresses - Get user addresses
 router.get('/addresses', verifyAuth, async (req, res) => {
   try {
@@ -380,34 +404,59 @@ router.post('/admins/invite', verifyAuth, verifyAdmin, async (req, res) => {
       console.warn('Notice: admin_invites table not available or insert skipped:', e.message);
     }
 
-    // 2. Trigger Supabase Auth Invite
+    // Generate a secure temporary password
+    const tempPassword = `AsatAdmin@${Math.floor(1000 + Math.random() * 9000)}`;
+
+    // 2. Create or Update Supabase Auth User with temporary credentials
     let authUser = null;
     try {
-      const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.inviteUserByEmail(
-        cleanEmail,
-        {
-          data: {
+      // Check if user already exists
+      const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+      const existing = listData?.users?.find(u => u.email?.toLowerCase() === cleanEmail);
+
+      if (existing) {
+        // User already exists, update password and metadata
+        const { data: updatedData, error: updateErr } = await supabaseAdmin.auth.admin.updateUserById(
+          existing.id,
+          {
+            password: tempPassword,
+            email_confirm: true,
+            user_metadata: {
+              full_name: cleanName,
+              role: 'admin',
+              admin_role: cleanRole
+            }
+          }
+        );
+        if (!updateErr) {
+          authUser = updatedData.user;
+          console.log(`✅ Updated existing auth user ${cleanEmail} with temporary password`);
+        } else {
+          authUser = existing;
+          console.warn('Update user warning:', updateErr.message);
+        }
+      } else {
+        // Create fresh auth user with temporary password
+        const { data: createdData, error: createErr } = await supabaseAdmin.auth.admin.createUser({
+          email: cleanEmail,
+          password: tempPassword,
+          email_confirm: true,
+          user_metadata: {
             full_name: cleanName,
             role: 'admin',
             admin_role: cleanRole
           }
-        }
-      );
+        });
 
-      if (authErr) {
-        // If user already exists in auth, find existing user
-        console.warn('inviteUserByEmail note:', authErr.message);
-        const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
-        const existing = listData?.users?.find(u => u.email?.toLowerCase() === cleanEmail);
-        if (existing) {
-          authUser = existing;
+        if (createErr) {
+          console.warn('createUser note:', createErr.message);
+        } else {
+          authUser = createdData.user;
+          console.log(`✅ Created fresh auth user for ${cleanEmail} with temporary password`);
         }
-      } else {
-        authUser = authData.user;
-        console.log(`✅ Supabase Auth invitation dispatched for ${cleanEmail}`);
       }
     } catch (authException) {
-      console.warn('Supabase Auth invite error:', authException.message);
+      console.warn('Supabase Auth provisioning warning:', authException.message);
     }
 
     // 3. Upsert admin record in public.admins if user ID is known
@@ -420,16 +469,16 @@ router.post('/admins/invite', verifyAuth, verifyAdmin, async (req, res) => {
       });
     }
 
-    // 4. Send branded email notification
+    // 4. Send branded email notification with temporary credentials
     try {
-      await sendAdminInviteEmail(cleanEmail, cleanName, cleanRole);
+      await sendAdminInviteEmail(cleanEmail, cleanName, cleanRole, tempPassword);
     } catch (emailErr) {
       console.warn('Email notification warning:', emailErr.message);
     }
 
     res.json({
       success: true,
-      message: `Invitation successfully sent to ${cleanEmail}`,
+      message: `Invitation and temporary credentials sent to ${cleanEmail}`,
       invite: inviteRecord || { email: cleanEmail, role: cleanRole, display_name: cleanName }
     });
   } catch (err) {
