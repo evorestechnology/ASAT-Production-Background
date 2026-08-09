@@ -223,11 +223,26 @@ router.post('/', verifyAuth, verifyDesigner, async (req, res) => {
     if (category) designPayload.category = category;
     if (tags) designPayload.tags = tags;
 
-    const { data, error } = await supabaseAdmin
+    let { data, error } = await supabaseAdmin
       .from('designs')
       .insert(designPayload)
       .select()
       .single();
+
+    // If insert fails due to unknown columns (schema not migrated yet), strip extra fields and retry
+    if (error && error.message && (error.message.includes('column') || error.message.includes('does not exist'))) {
+      console.warn('Design insert failed (column mismatch), retrying without optional columns:', error.message);
+      const fallbackPayload = { ...designPayload };
+      delete fallbackPayload.tags;
+      delete fallbackPayload.category;
+      const retry = await supabaseAdmin
+        .from('designs')
+        .insert(fallbackPayload)
+        .select()
+        .single();
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error) throw error;
 
@@ -240,7 +255,7 @@ router.post('/', verifyAuth, verifyDesigner, async (req, res) => {
 
     res.json({ success: true, design: data });
   } catch (err) {
-    console.error('Error submitting design:', err.message);
+    console.error('Error submitting design:', err.message, err.details || '', err.hint || '');
     res.status(500).json({ error: 'Failed to submit design' });
   }
 });
@@ -259,6 +274,8 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
       sizes,
       gender,
       collection,
+      tags,
+      category,
       status
     } = req.body;
 
@@ -290,6 +307,8 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
     if (sizes !== undefined) payload.sizes = sizes;
     if (gender !== undefined) payload.gender = gender;
     if (collection !== undefined) payload.collection = collection;
+    if (tags !== undefined) payload.tags = tags;
+    if (category !== undefined) payload.category = category;
 
     // Only admin can change status through general PUT or specific status PUT
     if (status !== undefined) {

@@ -74,7 +74,9 @@ router.put('/me', verifyAuth, verifyDesigner, async (req, res) => {
       username,
       avatar_url,
       upi_id,
-      paypal_id
+      paypal_id,
+      terms_accepted,
+      terms_accepted_at
     } = req.body;
 
     const updatePayload = {
@@ -90,6 +92,8 @@ router.put('/me', verifyAuth, verifyDesigner, async (req, res) => {
     if (avatar_url !== undefined) updatePayload.avatar_url = avatar_url;
     if (upi_id !== undefined) updatePayload.upi_id = upi_id;
     if (paypal_id !== undefined) updatePayload.paypal_id = paypal_id;
+    if (terms_accepted !== undefined) updatePayload.terms_accepted = terms_accepted;
+    if (terms_accepted_at !== undefined) updatePayload.terms_accepted_at = terms_accepted_at;
 
     if (username !== undefined) {
       const trimmedUsername = username.trim().toLowerCase();

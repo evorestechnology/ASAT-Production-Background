@@ -433,6 +433,7 @@ app.post('/api/auth/register-designer', async (req, res) => {
       country,
       upiId,
       paypalId,
+      termsAccepted,
     } = req.body;
 
     // Input validation
@@ -458,6 +459,10 @@ app.post('/api/auth/register-designer', async (req, res) => {
       validationErrors.upiId = 'UPI ID is required for designers in India';
     } else if (!isIndia && (!paypalId || !paypalId.trim())) {
       validationErrors.paypalId = 'PayPal ID is required for international designers';
+    }
+
+    if (!termsAccepted) {
+      validationErrors.termsAccepted = 'You must accept the Terms & Conditions to register';
     }
 
     if (Object.keys(validationErrors).length > 0) {
@@ -517,6 +522,8 @@ app.post('/api/auth/register-designer', async (req, res) => {
       country: country || 'India',
       upi_id: upiId ? upiId.trim() : null,
       paypal_id: paypalId ? paypalId.trim() : null,
+      terms_accepted: termsAccepted === true,
+      terms_accepted_at: termsAccepted === true ? new Date().toISOString() : null,
       status: 'active',
       designs_count: 0,
       total_earnings: 0,

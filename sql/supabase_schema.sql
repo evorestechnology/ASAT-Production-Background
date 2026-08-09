@@ -54,24 +54,26 @@ CREATE TABLE IF NOT EXISTS admin_invites (
 
 -- Designers
 CREATE TABLE IF NOT EXISTS designers (
-  id              UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  full_name       TEXT NOT NULL,
-  email           TEXT UNIQUE NOT NULL,
-  username        TEXT UNIQUE NOT NULL,
-  contact         TEXT,
-  country_code    TEXT,
-  gender          TEXT,
-  dob             DATE,
-  address         TEXT,
-  country         TEXT,
-  avatar_url      TEXT,
-  status          TEXT DEFAULT 'active' CHECK (status IN ('active','suspended','blocked')),
-  designs_count   INT DEFAULT 0,
-  total_earnings  NUMERIC(12,2) DEFAULT 0,
-  points          INT DEFAULT 0,
-  rank            INT,
-  created_at      TIMESTAMPTZ DEFAULT now(),
-  updated_at      TIMESTAMPTZ DEFAULT now()
+  id                  UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  full_name           TEXT NOT NULL,
+  email               TEXT UNIQUE NOT NULL,
+  username            TEXT UNIQUE NOT NULL,
+  contact             TEXT,
+  country_code        TEXT,
+  gender              TEXT,
+  dob                 DATE,
+  address             TEXT,
+  country             TEXT,
+  avatar_url          TEXT,
+  terms_accepted      BOOLEAN DEFAULT false,
+  terms_accepted_at   TIMESTAMPTZ,
+  status              TEXT DEFAULT 'active' CHECK (status IN ('active','suspended','blocked')),
+  designs_count       INT DEFAULT 0,
+  total_earnings      NUMERIC(12,2) DEFAULT 0,
+  points              INT DEFAULT 0,
+  rank                INT,
+  created_at          TIMESTAMPTZ DEFAULT now(),
+  updated_at          TIMESTAMPTZ DEFAULT now()
 );
 
 -- Manufacturers
@@ -150,6 +152,8 @@ CREATE TABLE IF NOT EXISTS designs (
   images            JSONB DEFAULT '[]',
   colors            JSONB DEFAULT '[]',
   sizes             JSONB DEFAULT '[]',
+  tags              JSONB DEFAULT '[]',
+  category          TEXT,
   gender            TEXT CHECK (gender IN ('male','female','unisex')),
   status            TEXT DEFAULT 'pending' CHECK (status IN ('pending','approved','restricted','active')),
   collection        TEXT,
@@ -535,3 +539,11 @@ DROP POLICY IF EXISTS "Users can delete own uploads" ON storage.objects;
 CREATE POLICY "Users can delete own uploads"
   ON storage.objects FOR DELETE
   USING (bucket_id = 'asat-uploads' AND auth.uid()::text = (storage.foldername(name))[1]);
+
+-- ─── Migration: Add terms_accepted columns to designers (run if upgrading existing DB) ───
+ALTER TABLE designers ADD COLUMN IF NOT EXISTS terms_accepted    BOOLEAN DEFAULT false;
+ALTER TABLE designers ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
+
+-- ─── Migration: Add tags and category columns to designs ───
+ALTER TABLE designs ADD COLUMN IF NOT EXISTS tags     JSONB DEFAULT '[]';
+ALTER TABLE designs ADD COLUMN IF NOT EXISTS category TEXT;
