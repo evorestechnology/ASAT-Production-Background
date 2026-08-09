@@ -719,6 +719,31 @@ app.get('/api/auth/resolve-role', verifyAuth, async (req, res) => {
         .maybeSingle();
 
       if (data && !error) {
+        // ── Status guard: block deleted / blocked accounts from resolving any role ──
+        if (table === 'manufacturers') {
+          if (data.status === 'deleted') {
+            return res.status(403).json({
+              error: 'This manufacturer account has been deleted. Please contact ASAT support.',
+              accountDeleted: true,
+            });
+          }
+          if (data.status === 'blocked') {
+            return res.status(403).json({
+              error: 'Your manufacturer account has been blocked by admin. Please contact support.',
+              accountBlocked: true,
+            });
+          }
+        }
+
+        if (table === 'designers') {
+          if (data.status === 'blocked') {
+            return res.status(403).json({
+              error: 'Your designer account has been blocked by admin. Please contact support.',
+              accountBlocked: true,
+            });
+          }
+        }
+
         return res.json(successResponse({ role: roleMap[table], profile: data }));
       }
     }

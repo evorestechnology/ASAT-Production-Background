@@ -1,22 +1,18 @@
 -- ═══════════════════════════════════════════════════════════════════
---  ASAT DATABASE FLUSH SCRIPT
---  Wipes ALL data from every table while preserving schema, indexes,
---  RLS policies, and storage bucket configuration.
+--  ASAT FULL DATABASE FLUSH SCRIPT
+--  Wipes EVERYTHING:
+--    * All application table data
+--    * All uploaded storage files (asat-uploads bucket)
+--    * All Supabase auth users (login credentials)
 --
---  ⚠️  WARNING: THIS IS IRREVERSIBLE. ALL DATA WILL BE PERMANENTLY LOST.
---  Run in: Supabase Dashboard → SQL Editor → New Query
---
---  Order matters: child tables first, then parents (respects FK constraints)
+--  WARNING: THIS IS COMPLETELY IRREVERSIBLE.
+--  ALL DATA, FILES, AND ACCOUNTS WILL BE PERMANENTLY LOST.
+--  Run in: Supabase Dashboard > SQL Editor > New Query
 -- ═══════════════════════════════════════════════════════════════════
 
--- ─── Safety confirmation ─────────────────────────────────────────────
 DO $$
 BEGIN
-  RAISE NOTICE '⚠️  ASAT DATABASE FLUSH SCRIPT';
-  RAISE NOTICE '    This script will DELETE ALL ROWS from every application table.';
-  RAISE NOTICE '    Schema, indexes, RLS policies, and storage config are preserved.';
-  RAISE NOTICE '    Auth users in auth.users are NOT deleted by this script.';
-  RAISE NOTICE '    Proceeding in 3... 2... 1...';
+  RAISE NOTICE 'ASAT FULL FLUSH: All data, storage files, and auth users will be deleted.';
 END $$;
 
 
@@ -120,22 +116,24 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
 
 
 -- ════════════════════════════════════════════════════════════════════
---  STEP 5: (Optional) Flush Supabase Storage objects for asat-uploads
---  Uncomment the block below if you also want to wipe uploaded files.
---  Note: This only removes the metadata rows. To delete actual files,
---  use Supabase Dashboard → Storage → asat-uploads → Empty bucket.
+--  STEP 5: Delete all uploaded storage files (asat-uploads bucket)
+--
+--  Removes metadata rows + triggers blob deletion in Supabase storage.
+--  If blobs remain: Dashboard > Storage > asat-uploads > Select All > Delete
 -- ════════════════════════════════════════════════════════════════════
-
--- DELETE FROM storage.objects WHERE bucket_id = 'asat-uploads';
+DELETE FROM storage.objects WHERE bucket_id = 'asat-uploads';
 
 
 -- ════════════════════════════════════════════════════════════════════
---  STEP 6: (Optional) Delete Supabase Auth users
---  Uncomment ONLY if you want to wipe all auth.users too.
---  ⚠️  This will prevent any existing user from logging in.
+--  STEP 6: Delete ALL Supabase Auth users
+--
+--  Removes every auth account. All designers, manufacturers, customers,
+--  and admins must re-register from scratch.
+--
+--  If this fails with a permissions error, go to:
+--    Dashboard > Authentication > Users > Select All > Delete
 -- ════════════════════════════════════════════════════════════════════
-
--- DELETE FROM auth.users;
+DELETE FROM auth.users;
 
 
 -- ════════════════════════════════════════════════════════════════════
@@ -143,9 +141,10 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
 -- ════════════════════════════════════════════════════════════════════
 DO $$
 BEGIN
-  RAISE NOTICE '✅ ASAT database flushed successfully.';
-  RAISE NOTICE '   All application data deleted. Schema preserved.';
-  RAISE NOTICE '   Default settings row re-inserted.';
-  RAISE NOTICE '   Auth users in auth.users were NOT deleted.';
-  RAISE NOTICE '   Storage files were NOT deleted (uncomment Step 5 to do so).';
+  RAISE NOTICE 'ASAT full flush complete.';
+  RAISE NOTICE '  All application table rows deleted.';
+  RAISE NOTICE '  All storage files deleted (asat-uploads).';
+  RAISE NOTICE '  All auth.users deleted.';
+  RAISE NOTICE '  Default settings row re-seeded.';
+  RAISE NOTICE '  Database is empty and ready for fresh use.';
 END $$;
