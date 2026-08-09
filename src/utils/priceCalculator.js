@@ -470,130 +470,132 @@ export async function enrichProductsWithLivePrintStyles(productsList) {
 export function isDesignConfigAvailable(design, liveStylesMap = {}) {
   if (!design) return { available: false, reason: 'Design not found' };
 
-  // 1. Check base product
-  const baseProduct = design.products;
-  if (!baseProduct) {
-    return { available: false, reason: 'Base product not found' };
-  }
-
-  if (baseProduct.available === false) {
-    return { available: false, reason: 'Base product is marked unavailable' };
-  }
-
-  const details = Array.isArray(baseProduct.details) ? baseProduct.details : [];
-  if (details.includes('__DELETED__')) {
-    return { available: false, reason: 'Base product has been deleted' };
-  }
-
-  // 2. Parse design description to get required placements
-  let desc = {};
   try {
-    desc = typeof design.description === 'string' ? JSON.parse(design.description) : (design.description || {});
-  } catch (e) {
-    desc = {};
-  }
+    // 1. Check base product
+    const baseProduct = design.products;
+    if (!baseProduct) {
+      return { available: false, reason: 'Base product not found' };
+    }
 
-  const placementsObj = desc.placements || desc.colorPlacements || {};
-  const colorKeys = Object.keys(placementsObj);
+    if (baseProduct.available === false) {
+      return { available: false, reason: 'Base product is marked unavailable' };
+    }
 
-  // If no placements specified on the design, fallback to base product availability
-  if (colorKeys.length === 0) {
-    return { available: true };
-  }
+    const details = Array.isArray(baseProduct.details) ? baseProduct.details : [];
+    if (details.includes('__DELETED__')) {
+      return { available: false, reason: 'Base product has been deleted' };
+    }
 
-  const basePrintingStyles = Array.isArray(baseProduct.printing_styles) ? baseProduct.printing_styles : [];
-  const mfgLiveStyles = (baseProduct.mfg_id && liveStylesMap[baseProduct.mfg_id]) ? liveStylesMap[baseProduct.mfg_id] : [];
+    // 2. Parse design description to get required placements
+    let desc = {};
+    try {
+      desc = typeof design.description === 'string' ? JSON.parse(design.description) : (design.description || {});
+    } catch (e) {
+      desc = {};
+    }
 
-  // Check required placements for each color
-  for (const colorKey of colorKeys) {
-    const colorPlacements = Array.isArray(placementsObj[colorKey]) ? placementsObj[colorKey] : [];
-    if (colorPlacements.length === 0) continue;
+    const placementsObj = desc.placements || desc.colorPlacements || {};
+    const colorKeys = Object.keys(placementsObj);
 
-    for (const placement of colorPlacements) {
-      const techKey = (placement.technique || placement.style || '').toLowerCase().trim();
-      const placementId = String(placement.placementId || placement.id || placement.label || '').trim();
-      const rawLabel = String(placement.placementLabel || placement.label || placement.name || '').trim();
+    // If no placements specified on the design, fallback to base product availability
+    if (colorKeys.length === 0) {
+      return { available: true };
+    }
 
-      // Check if technique is available in base product printing_styles
-      const ps = basePrintingStyles.find(x => {
-        const sKey = (x.style || x.name || x.type || '').toLowerCase().trim();
-        return sKey === techKey || (x.id && x.id === techKey);
-      });
+    const basePrintingStyles = Array.isArray(baseProduct.printing_styles) ? baseProduct.printing_styles : [];
+    const mfgLiveStyles = (baseProduct.mfg_id && liveStylesMap[baseProduct.mfg_id]) ? liveStylesMap[baseProduct.mfg_id] : [];
 
-      if (ps && ps.active === false) {
-        return { available: false, reason: `Printing style "${techKey.toUpperCase()}" is unavailable` };
-      }
+    // Check required placements for each color
+    for (const colorKey of colorKeys) {
+      const colorPlacements = Array.isArray(placementsObj[colorKey]) ? placementsObj[colorKey] : [];
+      if (colorPlacements.length === 0) continue;
 
-      // Check if matching live style from manufacturer exists and is active
-      const matchingLiveStyle = mfgLiveStyles.find(st => {
-        let stDesc = {};
-        try { stDesc = typeof st.description === 'string' ? JSON.parse(st.description) : (st.description || {}); } catch(e){}
-        const cat = (stDesc.category || '').toLowerCase().trim();
-        const name = (st.name || '').toLowerCase().trim();
-        return st.id === (ps?.id || techKey) || cat === techKey || name === techKey;
-      });
+      for (const placement of colorPlacements) {
+        if (!placement) continue;
+        const techKey = String(placement.technique || placement.style || '').toLowerCase().trim();
+        const placementId = String(placement.placementId || placement.id || placement.label || '').trim();
+        const rawLabel = String(placement.placementLabel || placement.label || placement.name || '').trim();
 
-      if (matchingLiveStyle && matchingLiveStyle.active === false) {
-        return { available: false, reason: `Printing style "${techKey.toUpperCase()}" is currently unavailable` };
-      }
+        // Check if technique is available in base product printing_styles
+        const ps = basePrintingStyles.find(x => {
+          const sKey = String(x.style || x.name || x.type || '').toLowerCase().trim();
+          return sKey === techKey || (x.id && x.id === techKey);
+        });
 
-      // Check live manufacturer print style first (live source of truth)
-      if (matchingLiveStyle) {
-        if (matchingLiveStyle.active === false) {
+        if (ps && ps.active === false) {
+          return { available: false, reason: `Printing style "${techKey.toUpperCase()}" is unavailable` };
+        }
+
+        // Check if matching live style from manufacturer exists and is active
+        const matchingLiveStyle = mfgLiveStyles.find(st => {
+          let stDesc = {};
+          try { stDesc = typeof st.description === 'string' ? JSON.parse(st.description) : (st.description || {}); } catch(e){}
+          const cat = String(stDesc.category || '').toLowerCase().trim();
+          const name = String(st.name || '').toLowerCase().trim();
+          return st.id === (ps?.id || techKey) || cat === techKey || name === techKey;
+        });
+
+        if (matchingLiveStyle && matchingLiveStyle.active === false) {
           return { available: false, reason: `Printing style "${techKey.toUpperCase()}" is currently unavailable` };
         }
 
-        let liveDesc = {};
-        try { liveDesc = typeof matchingLiveStyle.description === 'string' ? JSON.parse(matchingLiveStyle.description) : (matchingLiveStyle.description || {}); } catch(e){}
-        const placementCategories = Array.isArray(liveDesc.placementCategories) ? liveDesc.placementCategories : [];
+        // Check live manufacturer print style first (live source of truth)
+        if (matchingLiveStyle) {
+          let liveDesc = {};
+          try { liveDesc = typeof matchingLiveStyle.description === 'string' ? JSON.parse(matchingLiveStyle.description) : (matchingLiveStyle.description || {}); } catch(e){}
+          const placementCategories = Array.isArray(liveDesc.placementCategories) ? liveDesc.placementCategories : [];
 
-        if (placementCategories.length > 0) {
-          let extractedCategory = '';
-          if (placementId.includes('_')) {
-            const idx = placementId.lastIndexOf('_');
-            extractedCategory = placementId.substring(0, idx);
-          }
-          const normExtractedCat = extractedCategory.toLowerCase().trim().replace(/[\s_\-]/g, '');
-          const normPos = (rawLabel || placementId).toLowerCase().trim().replace(/[\s_\-]/g, '');
+          if (placementCategories.length > 0) {
+            let extractedCategory = '';
+            if (placementId.includes('_')) {
+              const idx = placementId.lastIndexOf('_');
+              extractedCategory = placementId.substring(0, idx);
+            }
+            const normExtractedCat = extractedCategory.toLowerCase().trim().replace(/[\s_\-]/g, '');
+            const normPos = (rawLabel || placementId).toLowerCase().trim().replace(/[\s_\-]/g, '');
 
-          for (const pc of placementCategories) {
-            const pcNorm = (pc.category || '').toLowerCase().trim().replace(/[\s_\-]/g, '');
-            if (pcNorm && (pcNorm === normExtractedCat || normExtractedCat.includes(pcNorm) || pcNorm.includes(normCat))) {
-              if (pc.available === false || pc.active === false) {
-                return { available: false, reason: `Placement category "${pc.category}" is currently unavailable` };
-              }
-              const opts = pc.placements || {};
-              const optItems = Array.isArray(opts) ? opts : Object.entries(opts).map(([k, v]) => ({ label: k, ...v }));
-              for (const opt of optItems) {
-                const optNorm = (opt.label || opt.name || '').toLowerCase().trim().replace(/[\s_\-]/g, '');
-                if (optNorm && (optNorm === normPos || normPos === optNorm || normPos.includes(optNorm) || optNorm.includes(normPos))) {
-                  if (opt.available === false || opt.active === false) {
-                    return { available: false, reason: `Placement position "${opt.label || opt.name}" is currently unavailable` };
+            for (const pc of placementCategories) {
+              const pcNorm = String(pc.category || '').toLowerCase().trim().replace(/[\s_\-]/g, '');
+              if (pcNorm && (pcNorm === normExtractedCat || (normExtractedCat && (normExtractedCat.includes(pcNorm) || pcNorm.includes(normExtractedCat))))) {
+                if (pc.available === false || pc.active === false) {
+                  return { available: false, reason: `Placement category "${pc.category}" is currently unavailable` };
+                }
+                const opts = pc.placements || {};
+                const optItems = Array.isArray(opts) ? opts : Object.entries(opts).map(([k, v]) => ({ label: k, ...v }));
+                for (const opt of optItems) {
+                  const optNorm = String(opt.label || opt.name || '').toLowerCase().trim().replace(/[\s_\-]/g, '');
+                  if (optNorm && (optNorm === normPos || normPos === optNorm || normPos.includes(optNorm) || optNorm.includes(normPos))) {
+                    if (opt.available === false || opt.active === false) {
+                      return { available: false, reason: `Placement position "${opt.label || opt.name}" is currently unavailable` };
+                    }
                   }
                 }
               }
             }
           }
-        }
-      } else {
-        // Fallback: check placement in baseProduct printing_styles if no live style found
-        if (ps && Array.isArray(ps.placements)) {
-          const pidClean = placementId.toLowerCase();
-          const pl = ps.placements.find(p => {
-            const pId = String(p.id || '').toLowerCase();
-            const pLabel = String(p.label || '').toLowerCase();
-            const pName = String(p.name || '').toLowerCase();
-            return pId === pidClean || pLabel === pidClean || pName === pidClean ||
-                   (pId && pidClean && (pId.endsWith('_' + pidClean) || pidClean.endsWith('_' + pId)));
-          });
+        } else {
+          // Fallback: check placement in baseProduct printing_styles if no live style found
+          if (ps && Array.isArray(ps.placements)) {
+            const pidClean = placementId.toLowerCase();
+            const pl = ps.placements.find(p => {
+              const pId = String(p.id || '').toLowerCase();
+              const pLabel = String(p.label || '').toLowerCase();
+              const pName = String(p.name || '').toLowerCase();
+              return pId === pidClean || pLabel === pidClean || pName === pidClean ||
+                     (pId && pidClean && (pId.endsWith('_' + pidClean) || pidClean.endsWith('_' + pId)));
+            });
 
-          if (pl && (pl.active === false || pl.available === false)) {
-            return { available: false, reason: `Placement position "${rawLabel || placementId}" is currently unavailable` };
+            if (pl && (pl.active === false || pl.available === false)) {
+              return { available: false, reason: `Placement position "${rawLabel || placementId}" is currently unavailable` };
+            }
           }
         }
       }
     }
-  }
 
-  return { available: true };
+    return { available: true };
+  } catch (err) {
+    console.error('Error checking design configuration availability:', err);
+    return { available: true };
+  }
 }
