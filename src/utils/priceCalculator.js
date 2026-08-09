@@ -174,6 +174,7 @@ export async function propagatePrintStyleCostToProducts(printStyleId, updatedSty
   const fullPlacementListFromStyle = [];
 
   for (const np of newPlacements) {
+    const catAvailable = np.available !== false;
     let placementsObjOrArr = np.placements;
     if (placementsObjOrArr) {
       const placementItems = Array.isArray(placementsObjOrArr)
@@ -181,6 +182,7 @@ export async function propagatePrintStyleCostToProducts(printStyleId, updatedSty
         : Object.entries(placementsObjOrArr).map(([optName, p]) => ({ ...p, label: optName }));
 
       for (const p of placementItems) {
+        const isOptAvailable = catAvailable && p.available !== false;
         const rawLabel = p.label || p.name || p.id || '';
         const capLabel = rawLabel ? (rawLabel.charAt(0).toUpperCase() + rawLabel.slice(1)) : 'Placement';
         const plId = np.category ? `${np.category}_${rawLabel}` : rawLabel;
@@ -191,33 +193,40 @@ export async function propagatePrintStyleCostToProducts(printStyleId, updatedSty
         fullPlacementListFromStyle.push({
           id: plId,
           label: capLabel,
+          category: np.category || '',
+          image: p.imagePreview || p.image || '',
           price: pr,
           cost_dark: cd,
-          cost_light: cl
+          cost_light: cl,
+          active: isOptAvailable
         });
 
         const labelKey = rawLabel.toLowerCase().trim();
         if (labelKey) {
-          newPlacementPriceMap[labelKey] = { price: pr, cost_dark: cd, cost_light: cl };
+          newPlacementPriceMap[labelKey] = { price: pr, cost_dark: cd, cost_light: cl, active: isOptAvailable, category: np.category || '', image: p.imagePreview || p.image || '' };
         }
         if (np.category && labelKey) {
           const catKey = `${np.category}_${labelKey}`.toLowerCase().trim();
-          newPlacementPriceMap[catKey] = { price: pr, cost_dark: cd, cost_light: cl };
+          newPlacementPriceMap[catKey] = { price: pr, cost_dark: cd, cost_light: cl, active: isOptAvailable, category: np.category || '', image: p.imagePreview || p.image || '' };
         }
       }
     } else {
       const key = (np.label || np.name || np.id || '').toLowerCase().trim();
       if (key) {
+        const isOptAvailable = np.available !== false && catAvailable;
         const pr = Number(np.price ?? np.cost ?? 0);
         const cd = Number(np.cost_dark ?? np.darkPrice ?? np.price_dark ?? 0);
         const cl = Number(np.cost_light ?? np.lightPrice ?? np.price_light ?? 0);
-        newPlacementPriceMap[key] = { price: pr, cost_dark: cd, cost_light: cl };
+        newPlacementPriceMap[key] = { price: pr, cost_dark: cd, cost_light: cl, active: isOptAvailable, category: np.category || '', image: np.imagePreview || np.image || '' };
         fullPlacementListFromStyle.push({
           id: np.id || key,
           label: np.label || key,
+          category: np.category || '',
+          image: np.imagePreview || np.image || '',
           price: pr,
           cost_dark: cd,
-          cost_light: cl
+          cost_light: cl,
+          active: isOptAvailable
         });
       }
     }
@@ -379,19 +388,24 @@ export async function enrichProductsWithLivePrintStyles(productsList) {
 
         const livePlacementItems = [];
         for (const np of livePlacementsRaw) {
+          const catAvailable = np.available !== false;
           let pItems = np.placements;
           if (pItems) {
             const items = Array.isArray(pItems) ? pItems : Object.entries(pItems).map(([optName, p]) => ({ ...p, label: optName }));
             for (const p of items) {
+              const isOptAvailable = catAvailable && p.available !== false;
               const rawLabel = p.label || p.name || p.id || '';
               const capLabel = rawLabel ? (rawLabel.charAt(0).toUpperCase() + rawLabel.slice(1)) : 'Placement';
               const plId = np.category ? `${np.category}_${rawLabel}` : rawLabel;
               livePlacementItems.push({
                 id: plId,
                 label: capLabel,
+                category: np.category || '',
+                image: p.imagePreview || p.image || '',
                 price: Number(p.price ?? p.cost ?? 0),
                 cost_dark: Number(p.darkPrice ?? p.cost_dark ?? p.price_dark ?? 0),
-                cost_light: Number(p.lightPrice ?? p.cost_light ?? p.price_light ?? 0)
+                cost_light: Number(p.lightPrice ?? p.cost_light ?? p.price_light ?? 0),
+                active: isOptAvailable
               });
             }
           } else {
@@ -400,9 +414,12 @@ export async function enrichProductsWithLivePrintStyles(productsList) {
               livePlacementItems.push({
                 id: np.id || key,
                 label: np.label || key,
+                category: np.category || '',
+                image: np.imagePreview || np.image || '',
                 price: Number(np.price ?? np.cost ?? 0),
                 cost_dark: Number(np.cost_dark ?? np.darkPrice ?? np.price_dark ?? 0),
-                cost_light: Number(np.cost_light ?? np.lightPrice ?? np.price_light ?? 0)
+                cost_light: Number(np.cost_light ?? np.lightPrice ?? np.price_light ?? 0),
+                active: np.available !== false && catAvailable
               });
             }
           }
@@ -421,7 +438,15 @@ export async function enrichProductsWithLivePrintStyles(productsList) {
           });
 
           if (idx >= 0) {
-            mergedPlacements[idx] = { ...mergedPlacements[idx], price: livePl.price, cost_dark: livePl.cost_dark, cost_light: livePl.cost_light };
+            mergedPlacements[idx] = {
+              ...mergedPlacements[idx],
+              price: livePl.price,
+              cost_dark: livePl.cost_dark,
+              cost_light: livePl.cost_light,
+              active: livePl.active !== undefined ? livePl.active : mergedPlacements[idx].active,
+              category: livePl.category || mergedPlacements[idx].category || '',
+              image: livePl.image || mergedPlacements[idx].image || ''
+            };
           } else {
             mergedPlacements.push(livePl);
           }
