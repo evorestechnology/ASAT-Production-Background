@@ -26,11 +26,11 @@ router.get('/', async (req, res) => {
 
     if (error) throw error;
 
-    // Fetch manufacturer status map to filter out suspended or blocked manufacturers
+    // Fetch manufacturer status map to filter out suspended, blocked, or deleted manufacturers
     const { data: mfgs } = await supabaseAdmin.from('manufacturers').select('id, status');
     const inactiveMfgIds = new Set(
       (mfgs || [])
-        .filter(m => m.status === 'suspended' || m.status === 'blocked' || m.status === 'restricted')
+        .filter(m => m.status === 'suspended' || m.status === 'blocked' || m.status === 'restricted' || m.status === 'deleted')
         .map(m => m.id)
     );
 

@@ -106,6 +106,10 @@ export async function verifyMfg(req, res, next) {
       return res.status(403).json({ error: 'Manufacturer access required' });
     }
 
+    if (data.status === 'deleted') {
+      return res.status(403).json({ error: 'This manufacturer account has been deleted. Please contact support.', accountDeleted: true });
+    }
+
     if (data.status === 'blocked') {
       return res.status(403).json({ error: 'Your manufacturer account has been blocked by admin.', accountBlocked: true });
     }
@@ -168,6 +172,9 @@ export async function resolveAnyRole(req, res, next) {
     // Check mfg
     const { data: mfg } = await supabaseAdmin.from('manufacturers').select('*').eq('id', uid).maybeSingle();
     if (mfg) {
+      if (mfg.status === 'deleted') {
+        return res.status(403).json({ error: 'This manufacturer account has been deleted. Please contact support.', accountDeleted: true });
+      }
       if (mfg.status === 'blocked') {
         return res.status(403).json({ error: 'Your manufacturer account has been blocked by admin.', accountBlocked: true });
       }

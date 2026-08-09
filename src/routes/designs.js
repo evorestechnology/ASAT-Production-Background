@@ -41,12 +41,20 @@ router.get('/', async (req, res) => {
     const { data, error } = await dbQuery;
     if (error) throw error;
 
-    // Fetch designer status map to filter out suspended or blocked designers
+    // Fetch designer status map to filter out suspended, blocked, or deleted designers
     const { data: designers } = await supabaseAdmin.from('designers').select('id, status');
     const inactiveDesignerIds = new Set(
       (designers || [])
-        .filter(d => d.status === 'suspended' || d.status === 'blocked' || d.status === 'restricted')
+        .filter(d => d.status === 'suspended' || d.status === 'blocked' || d.status === 'restricted' || d.status === 'deleted')
         .map(d => d.id)
+    );
+
+    // Also fetch manufacturer status map to filter designs whose base product belongs to a deleted/blocked mfg
+    const { data: mfgs } = await supabaseAdmin.from('manufacturers').select('id, status');
+    const inactiveMfgIds = new Set(
+      (mfgs || [])
+        .filter(m => m.status === 'suspended' || m.status === 'blocked' || m.status === 'restricted' || m.status === 'deleted')
+        .map(m => m.id)
     );
 
     const activeDesigns = (data || [])
@@ -55,7 +63,9 @@ router.get('/', async (req, res) => {
         if (isDesignHidden(d)) return false;
         if (d.products) {
           const details = Array.isArray(d.products.details) ? d.products.details : [];
-          return d.products.available !== false && !details.includes('__DELETED__');
+          if (d.products.available === false || details.includes('__DELETED__')) return false;
+          // Also hide designs linked to a deleted/inactive manufacturer's product
+          if (d.products.mfg_id && inactiveMfgIds.has(d.products.mfg_id)) return false;
         }
         return true;
       })

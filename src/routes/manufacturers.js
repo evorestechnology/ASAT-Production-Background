@@ -118,6 +118,42 @@ router.put('/:id', verifyAuth, verifyAdmin, async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    // If manufacturer is being deleted or blocked, mark ALL their products as unavailable
+    if (status === 'deleted' || status === 'blocked') {
+      try {
+        // Fetch all products belonging to this manufacturer
+        const { data: mfgProducts } = await supabaseAdmin
+          .from('products')
+          .select('id, details')
+          .eq('mfg_id', id)
+          .eq('available', true);
+
+        if (mfgProducts && mfgProducts.length > 0) {
+          const updatePromises = mfgProducts.map(product => {
+            const currentDetails = Array.isArray(product.details) ? [...product.details] : [];
+            const markerFlag = status === 'deleted' ? '__DELETED_MFG__' : '__BLOCKED_MFG__';
+            if (!currentDetails.includes(markerFlag)) {
+              currentDetails.push(markerFlag);
+            }
+            return supabaseAdmin
+              .from('products')
+              .update({
+                available: false,
+                details: currentDetails,
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', product.id);
+          });
+          await Promise.all(updatePromises);
+          console.log(`✅ Marked ${mfgProducts.length} products unavailable after manufacturer ${id} was set to ${status}.`);
+        }
+      } catch (productErr) {
+        // Don't fail the main response if product cascade fails — just log it
+        console.error(`⚠️  Failed to mark products unavailable for manufacturer ${id}:`, productErr.message);
+      }
+    }
+
     res.json({ success: true, manufacturer: data });
   } catch (err) {
     console.error('Error updating manufacturer:', err.message);
