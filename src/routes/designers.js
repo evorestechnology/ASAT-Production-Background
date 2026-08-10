@@ -75,6 +75,10 @@ router.put('/me', verifyAuth, verifyDesigner, async (req, res) => {
       avatar_url,
       upi_id,
       paypal_id,
+      description,
+      bio,
+      instagram,
+      linkedin,
       terms_accepted,
       terms_accepted_at
     } = req.body;
@@ -92,6 +96,15 @@ router.put('/me', verifyAuth, verifyDesigner, async (req, res) => {
     if (avatar_url !== undefined) updatePayload.avatar_url = avatar_url;
     if (upi_id !== undefined) updatePayload.upi_id = upi_id;
     if (paypal_id !== undefined) updatePayload.paypal_id = paypal_id;
+    if (description !== undefined) {
+      updatePayload.description = description;
+      updatePayload.bio = description;
+    } else if (bio !== undefined) {
+      updatePayload.bio = bio;
+      updatePayload.description = bio;
+    }
+    if (instagram !== undefined) updatePayload.instagram = instagram;
+    if (linkedin !== undefined) updatePayload.linkedin = linkedin;
     if (terms_accepted !== undefined) updatePayload.terms_accepted = terms_accepted;
     if (terms_accepted_at !== undefined) updatePayload.terms_accepted_at = terms_accepted_at;
 
@@ -121,6 +134,9 @@ router.put('/me', verifyAuth, verifyDesigner, async (req, res) => {
       // Column might not exist in table schema; strip unexisting columns and retry
       delete updatePayload.upi_id;
       delete updatePayload.paypal_id;
+      delete updatePayload.description;
+      delete updatePayload.instagram;
+      delete updatePayload.linkedin;
       const retry = await supabaseAdmin
         .from('designers')
         .update(updatePayload)

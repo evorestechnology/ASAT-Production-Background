@@ -433,6 +433,9 @@ app.post('/api/auth/register-designer', async (req, res) => {
       country,
       upiId,
       paypalId,
+      description,
+      instagram,
+      linkedin,
       termsAccepted,
     } = req.body;
 
@@ -452,6 +455,9 @@ app.post('/api/auth/register-designer', async (req, res) => {
     }
     if (!username || !validateUsername(username)) {
       validationErrors.username = 'Username must be 3-20 characters (letters, numbers, underscore, hyphen only)';
+    }
+    if (!description || description.trim().length < 5) {
+      validationErrors.description = 'Designer description is required (min 5 characters)';
     }
 
     const isIndia = (country || '').trim().toLowerCase() === 'india';
@@ -522,6 +528,10 @@ app.post('/api/auth/register-designer', async (req, res) => {
       country: country || 'India',
       upi_id: upiId ? upiId.trim() : null,
       paypal_id: paypalId ? paypalId.trim() : null,
+      bio: description ? description.trim() : null,
+      description: description ? description.trim() : null,
+      instagram: instagram ? instagram.trim() : null,
+      linkedin: linkedin ? linkedin.trim() : null,
       terms_accepted: termsAccepted === true,
       terms_accepted_at: termsAccepted === true ? new Date().toISOString() : null,
       status: 'active',
@@ -533,11 +543,19 @@ app.post('/api/auth/register-designer', async (req, res) => {
     let { error: profileError } = await supabaseAdmin.from('designers').insert(designerPayload);
 
     if (profileError && profileError.message && profileError.message.includes('column')) {
-      // Column might not exist in database schema; strip columns and append to address
+      // Column might not exist in database schema; strip newer columns and retry
       delete designerPayload.upi_id;
       delete designerPayload.paypal_id;
+      delete designerPayload.description;
+      delete designerPayload.instagram;
+      delete designerPayload.linkedin;
       const payoutNote = isIndia ? `[UPI: ${upiId.trim()}]` : `[PayPal: ${paypalId.trim()}]`;
-      designerPayload.address = (designerPayload.address || '') ? `${designerPayload.address} | Payout: ${payoutNote}` : `Payout: ${payoutNote}`;
+      let extraNotes = `Payout: ${payoutNote}`;
+      if (description) extraNotes += ` | Bio: ${description.trim()}`;
+      if (instagram) extraNotes += ` | IG: ${instagram.trim()}`;
+      if (linkedin) extraNotes += ` | IN: ${linkedin.trim()}`;
+
+      designerPayload.address = (designerPayload.address || '') ? `${designerPayload.address} | ${extraNotes}` : extraNotes;
       
       const retry = await supabaseAdmin.from('designers').insert(designerPayload);
       profileError = retry.error;
