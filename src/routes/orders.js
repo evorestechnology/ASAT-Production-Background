@@ -238,6 +238,8 @@ router.post('/', async (req, res) => {
 
     const computedPlatformEarnings = Math.max(0, total_amount - computedMfgEarnings - computedDesignerEarnings);
 
+    const initialStatus = req.body.status || (req.body.payment_status === 'PAID' ? 'confirmed' : 'pending');
+
     const payload = {
       order_id,
       user_id: user_id || null,
@@ -250,13 +252,13 @@ router.post('/', async (req, res) => {
       designer_id: designer_id || null,
       designer_username: designer_username || 'anonymous',
       mfg_id: mfg_id || null,
-      status: 'pending',
+      status: initialStatus,
       contact: contact || '',
       phone: phone || '',
       address: address || '',
       country: country || 'India',
       tracking_id: '',
-      status_history: [{ status: 'pending', time: new Date().toISOString() }],
+      status_history: [{ status: initialStatus, time: new Date().toISOString() }],
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
