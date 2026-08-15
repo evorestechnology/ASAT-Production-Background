@@ -181,7 +181,7 @@ CREATE TABLE IF NOT EXISTS orders (
   designer_id        UUID REFERENCES designers(id) ON DELETE SET NULL,
   designer_username  TEXT,
   mfg_id             UUID REFERENCES manufacturers(id) ON DELETE SET NULL,
-  status             TEXT DEFAULT 'pending' CHECK (status IN ('pending','confirmed','manufacturing','shipping','completed')),
+  status             TEXT DEFAULT 'pending' CHECK (status IN ('pending','confirmed','manufacturing','shipping','completed','cancelled','issue_reported')),
   contact            TEXT,
   phone              TEXT,
   address            TEXT,
