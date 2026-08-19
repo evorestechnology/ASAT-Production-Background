@@ -308,13 +308,13 @@ app.post('/api/auth/forgot-password/send-otp', async (req, res) => {
     if (transporter) {
       try {
         await transporter.sendMail({
-          from: `"As Simple as That" <${process.env.SMTP_USER}>`,
+          from: `"ASAT Designer Paradise" <${process.env.SMTP_USER}>`,
           to: normalizedEmail,
-          subject: 'ASAT — Password Reset Code',
+          subject: 'ASAT Designer Paradise — Password Reset Code',
           html: `
             <div style="font-family:'Montserrat',sans-serif;max-width:600px;margin:0 auto;padding:40px;background:#0d0d0d;color:#ffffff;border:1px solid #C5A059;border-radius:12px;">
               <h2 style="font-family:'Cinzel',serif;font-size:22px;font-weight:700;color:#C5A059;text-align:center;margin-bottom:24px;letter-spacing:2px;">PASSWORD RESET</h2>
-              <p style="font-size:15px;line-height:1.7;color:#cccccc;">We received a request to reset the password for your <strong style="color:#C5A059;">ASAT</strong> account associated with this email address.</p>
+              <p style="font-size:15px;line-height:1.7;color:#cccccc;">We received a request to reset the password for your <strong style="color:#C5A059;">ASAT Designer Paradise</strong> account associated with this email address.</p>
               <p style="font-size:15px;line-height:1.7;color:#cccccc;">Enter the following 6-digit verification code to proceed:</p>
 
               <div style="text-align:center;margin:36px 0;">
@@ -323,7 +323,7 @@ app.post('/api/auth/forgot-password/send-otp', async (req, res) => {
 
               <p style="font-size:13px;color:#888;line-height:1.6;">This code expires in <strong>5 minutes</strong>. If you did not request a password reset, you can safely ignore this email — your password will not be changed.</p>
               <hr style="border:0;border-top:1px solid rgba(255,255,255,0.07);margin:28px 0;">
-              <p style="font-size:11px;text-align:center;color:#555;letter-spacing:1px;">As Simple as That &bull; curated designer streetwear</p>
+              <p style="font-size:11px;text-align:center;color:#555;letter-spacing:1px;">ASAT Designer Paradise &bull; curated designer streetwear</p>
             </div>
           `,
         });

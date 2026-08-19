@@ -24,7 +24,7 @@ router.get('/all', verifyAuth, verifyAdmin, async (req, res) => {
 // POST /api/users/register - Register customer user profile & initialize wallet
 router.post('/register', async (req, res) => {
   try {
-    const { id, fullName, email, password } = req.body;
+    const { id, fullName, email, password, countryCode, mobileNumber, dob } = req.body;
     let finalId = id;
     
     // If password is provided, we need to create the user in Supabase Auth first
@@ -33,7 +33,13 @@ router.post('/register', async (req, res) => {
         const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.createUser({
           email: email.trim().toLowerCase(),
           password: password,
-          email_confirm: true // bypass email confirmation
+          email_confirm: true, // bypass email confirmation
+          user_metadata: {
+            full_name: fullName || '',
+            country_code: countryCode || '',
+            phone: mobileNumber || '',
+            dob: dob || ''
+          }
         });
         if (authErr) throw authErr;
         finalId = authData.user.id;
@@ -56,6 +62,7 @@ router.post('/register', async (req, res) => {
         id: finalId,
         full_name: fullName || '',
         email: email.trim().toLowerCase(),
+        phone: (countryCode && mobileNumber) ? `${countryCode} ${mobileNumber}` : (mobileNumber || ''),
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       })
@@ -165,14 +172,19 @@ router.put('/me', verifyAuth, resolveAnyRole, async (req, res) => {
     if (error) throw error;
 
     // Also keep Supabase Auth user_metadata in sync
-    if (full_name) {
-      try {
-        await supabaseAdmin.auth.admin.updateUserById(req.uid, {
-          user_metadata: { full_name }
-        });
-      } catch (metaErr) {
-        console.warn('Could not update user_metadata:', metaErr.message);
-      }
+    try {
+      const currentMeta = req.user?.user_metadata || {};
+      await supabaseAdmin.auth.admin.updateUserById(req.uid, {
+        user_metadata: {
+          ...currentMeta,
+          full_name: full_name || currentMeta.full_name,
+          country_code: req.body.countryCode || currentMeta.country_code,
+          phone: phone || currentMeta.phone,
+          dob: req.body.dob || currentMeta.dob
+        }
+      });
+    } catch (metaErr) {
+      console.warn('Could not update user_metadata:', metaErr.message);
     }
 
     res.json({ success: true, profile: data || { id: req.uid, full_name, role: req.role } });

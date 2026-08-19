@@ -87,6 +87,7 @@ const fetchDictFromApi = async () => {
     Object.keys(SUPPORTED_CURRENCIES).forEach(c => {
         if (generatedDict[c]) {
             generatedDict[c].decimals = SUPPORTED_CURRENCIES[c].decimals;
+            generatedDict[c].symbol = SUPPORTED_CURRENCIES[c].symbol;
         } else {
             generatedDict[c] = SUPPORTED_CURRENCIES[c];
         }
