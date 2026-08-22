@@ -528,7 +528,6 @@ app.post('/api/auth/register-designer', async (req, res) => {
       country: country || 'India',
       upi_id: upiId ? upiId.trim() : null,
       paypal_id: paypalId ? paypalId.trim() : null,
-      bio: description ? description.trim() : null,
       description: description ? description.trim() : null,
       instagram: instagram ? instagram.trim() : null,
       linkedin: linkedin ? linkedin.trim() : null,
@@ -585,7 +584,7 @@ app.post('/api/auth/register-designer', async (req, res) => {
     res.status(201).json(successResponse({ uid }, 'Designer registered successfully'));
   } catch (err) {
     console.error('Registration failed:', err);
-    res.status(500).json(errorResponse('Internal server error', 500));
+    res.status(500).json(errorResponse(err.message || 'Internal server error', 500));
   }
 });
 
