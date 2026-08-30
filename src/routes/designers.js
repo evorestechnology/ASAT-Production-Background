@@ -98,9 +98,7 @@ router.put('/me', verifyAuth, verifyDesigner, async (req, res) => {
     if (paypal_id !== undefined) updatePayload.paypal_id = paypal_id;
     if (description !== undefined) {
       updatePayload.description = description;
-      updatePayload.bio = description;
     } else if (bio !== undefined) {
-      updatePayload.bio = bio;
       updatePayload.description = bio;
     }
     if (instagram !== undefined) updatePayload.instagram = instagram;
@@ -165,7 +163,7 @@ router.get('/:id', async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from('designers')
-      .select('id, username, full_name, avatar_url, designs_count, total_earnings, points, created_at, status')
+      .select('id, username, full_name, avatar_url, description, instagram, linkedin, designs_count, total_earnings, points, created_at, status')
       .eq(column, id)
       .single();
 

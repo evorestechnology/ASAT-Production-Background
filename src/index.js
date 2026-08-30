@@ -671,6 +671,15 @@ app.post('/api/master/create-user', verifyAuth, verifyAdmin, async (req, res) =>
         await supabaseAdmin.auth.admin.deleteUser(newUid);
         throw profileError;
       }
+      // Initialize Wallet
+      await supabaseAdmin.from('wallets').insert({
+        id: newUid,
+        role: 'designer',
+        balance: 0,
+        total_spent: 0,
+        total_earnings: 0,
+        total_withdrawn: 0,
+      });
     } else if (role === 'mfg') {
       const { error: profileError } = await supabaseAdmin.from('manufacturers').insert({
         id: newUid,
@@ -682,6 +691,15 @@ app.post('/api/master/create-user', verifyAuth, verifyAdmin, async (req, res) =>
         await supabaseAdmin.auth.admin.deleteUser(newUid);
         throw profileError;
       }
+      // Initialize Wallet
+      await supabaseAdmin.from('wallets').insert({
+        id: newUid,
+        role: 'mfg',
+        balance: 0,
+        total_spent: 0,
+        total_earnings: 0,
+        total_withdrawn: 0,
+      });
     } else if (role === 'admin') {
       const { error: profileError } = await supabaseAdmin.from('admins').insert({
         id: newUid,

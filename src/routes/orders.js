@@ -5,6 +5,66 @@ import { sendOrderCancellationEmail } from '../utils/mailer.js';
 
 const router = express.Router();
 
+function decorateOrderWithCostAdjustment(order) {
+  if (!order) return order;
+  const history = Array.isArray(order.status_history) ? order.status_history : [];
+  
+  let latestRequest = null;
+  let latestApproval = null;
+  let latestRejection = null;
+  
+  for (let i = history.length - 1; i >= 0; i--) {
+    const entry = history[i];
+    if (entry.type === 'cost_adjustment_request' && !latestRequest) {
+      latestRequest = entry;
+    }
+    if (entry.type === 'cost_adjustment_approved' && !latestApproval) {
+      latestApproval = entry;
+    }
+    if (entry.type === 'cost_adjustment_rejected' && !latestRejection) {
+      latestRejection = entry;
+    }
+  }
+  
+  const getEntryTime = (e) => e && e.time ? new Date(e.time).getTime() : 0;
+  
+  const reqTime = getEntryTime(latestRequest);
+  const appTime = getEntryTime(latestApproval);
+  const rejTime = getEntryTime(latestRejection);
+  
+  const maxTime = Math.max(reqTime, appTime, rejTime);
+  if (maxTime === 0) {
+    order.cost_adjustment_status = null;
+    order.cost_adjustment_amount = null;
+    order.cost_adjustment_reason = null;
+    return order;
+  }
+  
+  if (maxTime === reqTime) {
+    order.cost_adjustment_status = 'requested';
+    order.cost_adjustment_amount = latestRequest.amount;
+    order.cost_adjustment_reason = latestRequest.reason;
+  } else if (maxTime === appTime) {
+    order.cost_adjustment_status = 'approved';
+    order.cost_adjustment_amount = latestApproval.amount;
+    order.cost_adjustment_reason = '';
+  } else {
+    order.cost_adjustment_status = 'rejected';
+    order.cost_adjustment_amount = latestRejection.amount;
+    order.cost_adjustment_reason = latestRejection.reason;
+  }
+  
+  return order;
+}
+
+function decorateOrders(orders) {
+  if (!orders) return orders;
+  if (Array.isArray(orders)) {
+    return orders.map(decorateOrderWithCostAdjustment);
+  }
+  return decorateOrderWithCostAdjustment(orders);
+}
+
 async function updateWallet(role, userId, earnings) {
   if (!userId || !earnings) return;
   try {
@@ -71,7 +131,7 @@ router.get('/', verifyAuth, resolveAnyRole, async (req, res) => {
 
     const { data, error } = await query;
     if (error) throw error;
-    res.json(data || []);
+    res.json(decorateOrders(data) || []);
   } catch (err) {
     console.error('Error fetching orders:', err.message);
     res.status(500).json({ error: 'Failed to fetch orders' });
@@ -89,7 +149,7 @@ router.get('/all', verifyAuth, async (req, res, next) => {
       .select('*, users(email)')
       .order('created_at', { ascending: false });
     if (error) throw error;
-    res.json(data || []);
+    res.json(decorateOrders(data) || []);
   } catch (err) {
     console.error('Error listing all orders:', err.message);
     res.status(500).json({ error: 'Failed to retrieve orders' });
@@ -115,7 +175,7 @@ router.get('/:id', async (req, res) => {
     }
     
     // Public tracking access: let anybody see the basic details if they have order ID
-    res.json(data);
+    res.json(decorateOrders(data));
   } catch (err) {
     console.error('Error fetching order details:', err.message);
     res.status(500).json({ error: 'Failed to fetch order details' });
@@ -377,9 +437,6 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
       
       if (finalStatus === 'completed' || finalStatus === 'delivered') {
         payload.completed_at = new Date().toISOString();
-        if (!order.delivered_at) {
-          payload.delivered_at = new Date().toISOString();
-        }
       } else if (finalStatus === 'shipping') {
         payload.shipped_at = new Date().toISOString();
       }
@@ -463,6 +520,21 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
             })
             .eq('id', updatedOrder.designer_id);
         }
+
+        // Also update total_earnings in designers table
+        const { data: designerData } = await supabaseAdmin
+          .from('designers')
+          .select('total_earnings')
+          .eq('id', updatedOrder.designer_id)
+          .maybeSingle();
+        if (designerData) {
+          await supabaseAdmin
+            .from('designers')
+            .update({
+              total_earnings: Number(designerData.total_earnings || 0) + Number(updatedOrder.designer_earnings || 0)
+            })
+            .eq('id', updatedOrder.designer_id);
+        }
       }
     } else if (wasDone && !isNowDone) {
       // Reverted from completed/delivered: Deduct Manufacturer Wallet
@@ -501,10 +573,25 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
             })
             .eq('id', updatedOrder.designer_id);
         }
+
+        // Also deduct total_earnings in designers table
+        const { data: designerData } = await supabaseAdmin
+          .from('designers')
+          .select('total_earnings')
+          .eq('id', updatedOrder.designer_id)
+          .maybeSingle();
+        if (designerData) {
+          await supabaseAdmin
+            .from('designers')
+            .update({
+              total_earnings: Math.max(0, Number(designerData.total_earnings || 0) - Number(updatedOrder.designer_earnings || 0))
+            })
+            .eq('id', updatedOrder.designer_id);
+        }
       }
     }
 
-    res.json({ success: true, order: updatedOrder });
+    res.json({ success: true, order: decorateOrders(updatedOrder) });
   } catch (err) {
     console.error('Error updating order:', err.message);
     res.status(500).json({ error: 'Failed to update order' });
@@ -545,9 +632,6 @@ router.post('/:id/cost-adjustment', verifyAuth, resolveAnyRole, async (req, res)
     };
 
     const payload = {
-      cost_adjustment_status: 'requested',
-      cost_adjustment_amount: numAmount,
-      cost_adjustment_reason: reason || '',
       status_history: [...history, historyEntry],
       updated_at: new Date().toISOString()
     };
@@ -593,7 +677,7 @@ router.post('/:id/cost-adjustment', verifyAuth, resolveAnyRole, async (req, res)
       console.error('Failed to create ticket for cost adjustment:', tErr.message);
     }
 
-    res.json({ success: true, order: updatedOrder });
+    res.json({ success: true, order: decorateOrders(updatedOrder) });
   } catch (err) {
     console.error('Error submitting cost adjustment:', err.message);
     res.status(500).json({ error: 'Failed to submit cost adjustment request.' });
@@ -620,11 +704,12 @@ router.post('/:id/cost-adjustment/review', verifyAuth, resolveAnyRole, async (re
       return res.status(404).json({ error: 'Order not found.' });
     }
 
-    if (!order.cost_adjustment_amount || order.cost_adjustment_status !== 'requested') {
+    const decoratedOrder = decorateOrderWithCostAdjustment(order);
+    if (!decoratedOrder.cost_adjustment_amount || decoratedOrder.cost_adjustment_status !== 'requested') {
       return res.status(400).json({ error: 'No active cost adjustment request found for this order.' });
     }
 
-    const adjAmount = Number(order.cost_adjustment_amount) || 0;
+    const adjAmount = Number(decoratedOrder.cost_adjustment_amount) || 0;
     const history = Array.isArray(order.status_history) ? order.status_history : [];
 
     if (action === 'accept') {
@@ -636,7 +721,6 @@ router.post('/:id/cost-adjustment/review', verifyAuth, resolveAnyRole, async (re
       };
 
       const payload = {
-        cost_adjustment_status: 'approved',
         mfg_earnings: newMfgEarnings,
         status_history: [...history, historyEntry],
         updated_at: new Date().toISOString()
@@ -683,7 +767,7 @@ router.post('/:id/cost-adjustment/review', verifyAuth, resolveAnyRole, async (re
         console.error('Error closing cost adjustment ticket:', tErr.message);
       }
 
-      return res.json({ success: true, message: `Cost adjustment of ₹${adjAmount} accepted! Manufacturer and Master wallets updated.`, order: updatedOrder });
+      return res.json({ success: true, message: `Cost adjustment of ₹${adjAmount} accepted! Manufacturer and Master wallets updated.`, order: decorateOrders(updatedOrder) });
     } else if (action === 'reject') {
       const historyEntry = {
         type: 'cost_adjustment_rejected',
@@ -693,7 +777,6 @@ router.post('/:id/cost-adjustment/review', verifyAuth, resolveAnyRole, async (re
       };
 
       const payload = {
-        cost_adjustment_status: 'rejected',
         status_history: [...history, historyEntry],
         updated_at: new Date().toISOString()
       };
@@ -732,7 +815,7 @@ router.post('/:id/cost-adjustment/review', verifyAuth, resolveAnyRole, async (re
         console.error('Error closing cost adjustment ticket:', tErr.message);
       }
 
-      return res.json({ success: true, message: 'Cost adjustment request rejected. Manufacturer can re-request if needed.', order: updatedOrder });
+      return res.json({ success: true, message: 'Cost adjustment request rejected. Manufacturer can re-request if needed.', order: decorateOrders(updatedOrder) });
     } else {
       return res.status(400).json({ error: 'Invalid action. Expected "accept" or "reject".' });
     }
