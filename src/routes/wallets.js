@@ -12,18 +12,10 @@ export const syncWalletBalance = async (userId) => {
       .select('*');
 
     let eligibleEarnings = 0;
-    const THIRTY_SIX_HOURS_MS = 36 * 60 * 60 * 1000;
-    const now = Date.now();
 
     (orders || []).forEach(order => {
       const isDelivered = (order.status === 'completed' || order.status === 'delivered');
       if (!isDelivered) return;
-
-      const delTimeStr = order.delivered_at || order.completed_at || order.updated_at || order.created_at;
-      const delTime = delTimeStr ? new Date(delTimeStr).getTime() : 0;
-      const is36HoursPassed = (now - delTime) >= THIRTY_SIX_HOURS_MS;
-
-      if (!is36HoursPassed) return; // Must be 36 hours after manufacturer marked as delivered
 
       const items = Array.isArray(order.items) ? order.items : [];
       items.forEach(item => {

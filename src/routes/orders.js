@@ -2,6 +2,7 @@ import express from 'express';
 import { supabaseAdmin } from '../supabaseAdmin.js';
 import { verifyAuth, resolveAnyRole } from '../middleware/auth.js';
 import { sendOrderCancellationEmail } from '../utils/mailer.js';
+import { syncWalletBalance } from './wallets.js';
 
 const router = express.Router();
 
@@ -217,6 +218,11 @@ router.post('/', async (req, res) => {
 
         if (item.isMfgProduct) {
           computedMfgEarnings += itemPrice * qty;
+          item.user_price = itemPrice;
+          item.mfg_price = itemPrice;
+          item.designer_price = 0;
+          item.master_price = 0;
+          item.price = itemPrice;
         } else {
           try {
             const { data: design, error: dErr } = await supabaseAdmin
@@ -281,16 +287,42 @@ router.post('/', async (req, res) => {
                 }
               }
 
-              computedMfgEarnings += (baseCost + actualPrintingCost) * qty;
+              const itemMfgPrice = baseCost + actualPrintingCost;
+              computedMfgEarnings += itemMfgPrice * qty;
               computedDesignerEarnings += designerCost * qty;
+
+              // Snapshot prices on item object
+              item.price = itemPrice;
+              item.user_price = itemPrice;
+              item.mfg_price = itemMfgPrice;
+              item.designer_price = designerCost;
+              item.master_price = Math.max(0, itemPrice - (itemMfgPrice + designerCost));
+              item.baseCost = baseCost;
+              item.printCost = actualPrintingCost;
             } else {
-              computedDesignerEarnings += Math.round(itemPrice * qty * 0.1);
-              computedMfgEarnings += Math.round(itemPrice * qty * 0.4);
+              const dEarn = Math.round(itemPrice * 0.1);
+              const mEarn = Math.round(itemPrice * 0.4);
+              computedDesignerEarnings += dEarn * qty;
+              computedMfgEarnings += mEarn * qty;
+
+              item.price = itemPrice;
+              item.user_price = itemPrice;
+              item.mfg_price = mEarn;
+              item.designer_price = dEarn;
+              item.master_price = Math.max(0, itemPrice - (mEarn + dEarn));
             }
           } catch (err) {
             console.error("Error calculating item earnings on backend:", err);
-            computedDesignerEarnings += Math.round(itemPrice * qty * 0.1);
-            computedMfgEarnings += Math.round(itemPrice * qty * 0.4);
+            const dEarn = Math.round(itemPrice * 0.1);
+            const mEarn = Math.round(itemPrice * 0.4);
+            computedDesignerEarnings += dEarn * qty;
+            computedMfgEarnings += mEarn * qty;
+
+            item.price = itemPrice;
+            item.user_price = itemPrice;
+            item.mfg_price = mEarn;
+            item.designer_price = dEarn;
+            item.master_price = Math.max(0, itemPrice - (mEarn + dEarn));
           }
         }
       }
@@ -437,6 +469,7 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
       
       if (finalStatus === 'completed' || finalStatus === 'delivered') {
         payload.completed_at = new Date().toISOString();
+        payload.delivered_at = new Date().toISOString();
       } else if (finalStatus === 'shipping') {
         payload.shipped_at = new Date().toISOString();
       }
@@ -450,6 +483,18 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    // Immediately credit and sync designer wallet balance upon delivery
+    if (finalStatus === 'completed' || finalStatus === 'delivered') {
+      const dId = updatedOrder?.designer_id || order?.designer_id;
+      if (dId) {
+        try {
+          await syncWalletBalance(dId);
+        } catch (wErr) {
+          console.error('Error syncing designer wallet upon order delivery:', wErr.message);
+        }
+      }
+    }
 
     // Send Cancellation Email to Customer if order became cancelled
     if (updatedOrder.status === 'cancelled' && order.status !== 'cancelled') {

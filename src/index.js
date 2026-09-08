@@ -282,6 +282,23 @@ app.post('/api/auth/forgot-password/send-otp', async (req, res) => {
       }
     } catch (_) { /* continue */ }
 
+    // Also check designers and users tables directly
+    if (!userFound) {
+      try {
+        const { data: dMatch } = await supabaseAdmin.from('designers').select('id, email').eq('email', normalizedEmail).maybeSingle();
+        if (dMatch) {
+          userFound = true;
+          userUid = dMatch.id;
+        } else {
+          const { data: uMatch } = await supabaseAdmin.from('users').select('id, email').eq('email', normalizedEmail).maybeSingle();
+          if (uMatch) {
+            userFound = true;
+            userUid = uMatch.id;
+          }
+        }
+      } catch (_) { /* continue */ }
+    }
+
     if (!userFound) {
       // For security, don't reveal whether the email exists — return same message
       // but skip sending OTP
@@ -393,6 +410,18 @@ app.post('/api/auth/forgot-password/reset', async (req, res) => {
         if (match) uid = match.id;
       }
     } catch (_) { /* continue */ }
+
+    // Also check designers and users tables directly
+    if (!uid) {
+      try {
+        const { data: dMatch } = await supabaseAdmin.from('designers').select('id, email').eq('email', normalizedEmail).maybeSingle();
+        if (dMatch) uid = dMatch.id;
+        else {
+          const { data: uMatch } = await supabaseAdmin.from('users').select('id, email').eq('email', normalizedEmail).maybeSingle();
+          if (uMatch) uid = uMatch.id;
+        }
+      } catch (_) { /* continue */ }
+    }
 
     if (!uid) {
       return res.status(404).json(errorResponse('Account not found.'));
