@@ -233,10 +233,11 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Designer not found' });
     }
 
-    // Retrieve bio, instagram, linkedin from auth user metadata
+    // Retrieve bio, instagram, linkedin, speciality from auth user metadata
     let bio = '';
     let instagram = '';
     let linkedin = '';
+    let speciality = '';
     try {
       const { data: userData } = await supabaseAdmin.auth.admin.getUserById(data.id);
       if (userData?.user?.user_metadata) {
@@ -244,9 +245,33 @@ router.get('/:id', async (req, res) => {
         bio = meta.bio || meta.description || '';
         instagram = meta.instagram || '';
         linkedin = meta.linkedin || '';
+        speciality = meta.speciality || '';
       }
     } catch (uErr) {
       console.warn('Could not fetch user metadata for designer:', uErr.message);
+    }
+
+    // Fallback: parse legacy address notes if bio/socials are empty
+    if (data.address && typeof data.address === 'string') {
+      const parts = data.address.split(' | ');
+      parts.forEach(part => {
+        if (!bio && part.startsWith('Bio: ')) {
+          bio = part.replace('Bio: ', '').trim();
+        }
+        if (!instagram && part.startsWith('IG: ')) {
+          instagram = part.replace('IG: ', '').trim();
+        }
+        if (!linkedin && part.startsWith('IN: ')) {
+          linkedin = part.replace('IN: ', '').trim();
+        }
+      });
+      // Sanitize address for public view by removing internal notes
+      data.address = parts[0].replace(/^@\s*/, '').trim();
+    }
+
+    // Fallback if instagram is still empty: use designer's username
+    if (!instagram && data.username) {
+      instagram = data.username;
     }
 
     // Compute designer rank from leaderboard
@@ -269,10 +294,11 @@ router.get('/:id', async (req, res) => {
 
     res.json({
       ...data,
-      bio,
-      description: bio,
+      bio: bio || 'Luxury streetwear creator & fashion artist at Designer Paradise.',
+      description: bio || 'Luxury streetwear creator & fashion artist at Designer Paradise.',
       instagram,
       linkedin,
+      speciality: speciality || 'Streetwear & Haute Couture',
       rank,
       ranking: rank
     });
