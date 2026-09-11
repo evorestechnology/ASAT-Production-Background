@@ -4,7 +4,7 @@ import { verifyAuth, resolveAnyRole, verifyAdmin } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Helper to recalculate wallet balance with 36-hour delay rule after manufacturer delivery
+// Helper to recalculate wallet balance with eligible completed earnings and pending escrow
 export const syncWalletBalance = async (userId) => {
   try {
     const { data: orders } = await supabaseAdmin
@@ -12,31 +12,58 @@ export const syncWalletBalance = async (userId) => {
       .select('*');
 
     let eligibleEarnings = 0;
+    let pendingEarnings = 0;
 
     (orders || []).forEach(order => {
-      const isDelivered = (order.status === 'completed' || order.status === 'delivered');
-      if (!isDelivered) return;
+      // Cancelled orders produce zero earnings for anyone
+      if (order.status === 'cancelled') return;
 
+      const isDelivered = (order.status === 'completed' || order.status === 'delivered');
       const items = Array.isArray(order.items) ? order.items : [];
+
+      // 1. Manufacturer earnings
+      if (order.mfg_id === userId) {
+        const mfgAmt = Number(order.mfg_earnings) || 0;
+        if (isDelivered) {
+          eligibleEarnings += mfgAmt;
+        } else {
+          pendingEarnings += mfgAmt;
+        }
+      }
+
+      // 2. Designer earnings
+      let designerOrderEarnings = 0;
+      let matchedItems = 0;
+
       items.forEach(item => {
         const isItemDesigner = (item.designerId && item.designerId === userId) ||
+                               (item.designer_id && item.designer_id === userId) ||
                                (!item.isMfgProduct && order.designer_id === userId);
 
         if (isItemDesigner) {
+          matchedItems++;
           const qty = Number(item.qty) || 1;
-          let royaltyPerItem = Number(item.designerRoyalty) || Number(item.designerCost) || 0;
-          if (!royaltyPerItem) {
-            royaltyPerItem = Math.round((Number(order.designer_earnings) || 0) / (items.length || 1) / qty);
+          let royaltyPerItem = Number(item.designer_price) || Number(item.designerRoyalty) || Number(item.designerCost) || 0;
+          if (royaltyPerItem > 0) {
+            designerOrderEarnings += royaltyPerItem * qty;
           }
-          eligibleEarnings += royaltyPerItem * qty;
-        }
-
-        const isItemMfg = (item.mfgId && item.mfgId === userId) || (order.mfg_id === userId);
-        if (isItemMfg) {
-          const mfgE = Number(order.mfg_earnings) || 0;
-          eligibleEarnings += mfgE;
         }
       });
+
+      let orderDesignerAmt = 0;
+      if (matchedItems > 0 && designerOrderEarnings > 0) {
+        orderDesignerAmt = designerOrderEarnings;
+      } else if (order.designer_id === userId) {
+        orderDesignerAmt = Number(order.designer_earnings) || 0;
+      }
+
+      if (orderDesignerAmt > 0) {
+        if (isDelivered) {
+          eligibleEarnings += orderDesignerAmt;
+        } else {
+          pendingEarnings += orderDesignerAmt;
+        }
+      }
     });
 
     // Get total withdrawals for this user
@@ -70,7 +97,10 @@ export const syncWalletBalance = async (userId) => {
       .select()
       .single();
 
-    return updatedWallet;
+    return {
+      ...(updatedWallet || { id: userId, balance: calculatedBalance, total_earnings: eligibleEarnings, total_withdrawn: totalWithdrawn }),
+      pending_balance: pendingEarnings
+    };
   } catch (err) {
     console.error('Error syncing wallet balance:', err.message);
     return null;
@@ -135,6 +165,168 @@ router.get('/all', verifyAuth, verifyAdmin, async (req, res) => {
   }
 });
 
+// GET /api/wallets/admin-stats - Live financial metrics & ledger for Master Wallet (admin only)
+router.get('/admin-stats', verifyAuth, verifyAdmin, async (req, res) => {
+  try {
+    const { data: orders, error } = await supabaseAdmin
+      .from('orders')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    let totalRevenue = 0;
+    let designerPayouts = 0;
+    let mfgPayouts = 0;
+
+    let completedRevenue = 0;
+    let completedDesigner = 0;
+    let completedMfg = 0;
+
+    let pendingRevenue = 0;
+    let pendingDesigner = 0;
+    let pendingMfg = 0;
+
+    const ledger = [];
+
+    (orders || []).forEach(o => {
+      const isCancelled = o.status === 'cancelled';
+      const isCompleted = (o.status === 'completed' || o.status === 'delivered');
+      const orderTotal = Number(o.total_amount) || 0;
+      const desAmt = Number(o.designer_earnings) || 0;
+      const mfgAmt = Number(o.mfg_earnings) || 0;
+      const platAmt = Math.max(0, orderTotal - desAmt - mfgAmt);
+
+      ledger.push({
+        id: o.id,
+        orderId: o.order_id || o.id,
+        date: o.created_at,
+        status: o.status,
+        customer: o.customer_name || 'Customer',
+        country: o.country || 'India',
+        totalAmount: orderTotal,
+        designerEarnings: desAmt,
+        mfgEarnings: mfgAmt,
+        platformEarnings: platAmt,
+        isCancelled,
+        isCompleted
+      });
+
+      if (isCancelled) return; // Exclude cancelled orders from active realized totals
+
+      totalRevenue += orderTotal;
+      designerPayouts += desAmt;
+      mfgPayouts += mfgAmt;
+
+      if (isCompleted) {
+        completedRevenue += orderTotal;
+        completedDesigner += desAmt;
+        completedMfg += mfgAmt;
+      } else {
+        pendingRevenue += orderTotal;
+        pendingDesigner += desAmt;
+        pendingMfg += mfgAmt;
+      }
+    });
+
+    const platformEarnings = Math.max(0, totalRevenue - designerPayouts - mfgPayouts);
+    const completedPlatform = Math.max(0, completedRevenue - completedDesigner - completedMfg);
+    const pendingPlatform = Math.max(0, pendingRevenue - pendingDesigner - pendingMfg);
+
+    res.json({
+      totalRevenue,
+      designerPayouts,
+      mfgPayouts,
+      platformEarnings,
+      completed: {
+        revenue: completedRevenue,
+        designer: completedDesigner,
+        mfg: completedMfg,
+        platform: completedPlatform
+      },
+      pending: {
+        revenue: pendingRevenue,
+        designer: pendingDesigner,
+        mfg: pendingMfg,
+        platform: pendingPlatform
+      },
+      ledger
+    });
+  } catch (err) {
+    console.error('Error fetching admin wallet stats:', err.message);
+    res.status(500).json({ error: 'Failed to fetch admin stats' });
+  }
+});
+
+// GET /api/wallets/ledger - Get personal order earnings breakdown (for mfg or designer)
+router.get('/ledger', verifyAuth, resolveAnyRole, async (req, res) => {
+  try {
+    const { data: orders, error } = await supabaseAdmin
+      .from('orders')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    const ledger = [];
+    (orders || []).forEach(order => {
+      const items = Array.isArray(order.items) ? order.items : [];
+      if (req.role === 'mfg' && order.mfg_id === req.uid) {
+        const isDelivered = (order.status === 'completed' || order.status === 'delivered');
+        const isCancelled = order.status === 'cancelled';
+        ledger.push({
+          id: order.id,
+          orderId: order.order_id || order.id,
+          date: order.created_at,
+          customer: order.customer_name || 'Customer',
+          itemsCount: items.reduce((s, i) => s + (Number(i.qty) || 1), 0),
+          amount: Number(order.mfg_earnings) || 0,
+          status: order.status,
+          isCancelled,
+          isDelivered,
+          settlementStatus: isCancelled ? 'Cancelled' : isDelivered ? 'Credited to Balance' : 'In Production / Escrow'
+        });
+      } else if (req.role === 'designer') {
+        let designerOrderEarnings = 0;
+        let matched = false;
+        items.forEach(item => {
+          if (item.designerId === req.uid || item.designer_id === req.uid || (!item.isMfgProduct && order.designer_id === req.uid)) {
+            matched = true;
+            const qty = Number(item.qty) || 1;
+            const r = Number(item.designer_price) || Number(item.designerRoyalty) || Number(item.designerCost) || 0;
+            designerOrderEarnings += r * qty;
+          }
+        });
+        if (!matched && order.designer_id === req.uid) {
+          matched = true;
+          designerOrderEarnings = Number(order.designer_earnings) || 0;
+        }
+        if (matched) {
+          const isDelivered = (order.status === 'completed' || order.status === 'delivered');
+          const isCancelled = order.status === 'cancelled';
+          ledger.push({
+            id: order.id,
+            orderId: order.order_id || order.id,
+            date: order.created_at,
+            customer: order.customer_name || 'Customer',
+            itemsCount: items.reduce((s, i) => s + (Number(i.qty) || 1), 0),
+            amount: designerOrderEarnings,
+            status: order.status,
+            isCancelled,
+            isDelivered,
+            settlementStatus: isCancelled ? 'Cancelled' : isDelivered ? 'Credited to Balance' : 'In Production / Escrow'
+          });
+        }
+      }
+    });
+
+    res.json(ledger);
+  } catch (err) {
+    console.error('Error fetching personal ledger:', err.message);
+    res.status(500).json({ error: 'Failed to fetch personal ledger' });
+  }
+});
+
 // GET /api/wallets/withdrawals - Get own withdrawals history
 router.get('/withdrawals', verifyAuth, resolveAnyRole, async (req, res) => {
   try {
@@ -177,31 +369,22 @@ router.post('/withdraw', verifyAuth, resolveAnyRole, async (req, res) => {
       return res.status(400).json({ error: 'Please enter a valid amount.' });
     }
 
-    // Fetch wallet to verify balance
-    const { data: wallet, error: walletError } = await supabaseAdmin
-      .from('wallets')
-      .select('balance')
-      .eq('id', req.uid)
-      .single();
+    // Sync wallet first to verify true live balance
+    const liveWallet = await syncWalletBalance(req.uid);
+    const balance = liveWallet ? Number(liveWallet.balance) : 0;
 
-    if (walletError || !wallet) {
-      return res.status(404).json({ error: 'Wallet not found.' });
-    }
-
-    if (amt > Number(wallet.balance)) {
-      return res.status(400).json({ error: 'Insufficient balance in wallet.' });
+    if (amt > balance) {
+      return res.status(400).json({ error: `Insufficient withdrawable balance. Available: ₹${balance.toLocaleString('en-IN')}` });
     }
 
     // Insert withdrawal request
-    const username = req.roleData?.username || req.roleData?.business_name || req.user.email.split('@')[0];
+    const username = req.roleData?.username || req.roleData?.business_name || (req.user?.email ? req.user.email.split('@')[0] : 'User');
     const withdrawalPayload = {
       user_id: req.uid,
       username,
       role: req.role === 'mfg' ? 'mfg' : 'designer',
       amount: amt,
       status: 'pending',
-      payment_method: paymentMethod || null,
-      payment_id: paymentId || null,
       created_at: new Date().toISOString()
     };
 
@@ -211,19 +394,11 @@ router.post('/withdraw', verifyAuth, resolveAnyRole, async (req, res) => {
       .select()
       .single();
 
-    if (error && error.message && error.message.includes('column')) {
-      delete withdrawalPayload.payment_method;
-      delete withdrawalPayload.payment_id;
-      const retry = await supabaseAdmin
-        .from('withdrawals')
-        .insert(withdrawalPayload)
-        .select()
-        .single();
-      data = retry.data;
-      error = retry.error;
-    }
-
     if (error) throw error;
+
+    // Immediately resync wallet to subtract this pending withdrawal from available balance
+    await syncWalletBalance(req.uid);
+
     res.json({ success: true, withdrawal: data });
   } catch (err) {
     console.error('Error submitting withdrawal request:', err.message);
@@ -308,6 +483,10 @@ router.put('/withdrawals/:id', verifyAuth, verifyAdmin, async (req, res) => {
       .single();
 
     if (updateErr) throw updateErr;
+
+    // Resync user's wallet so pending vs withdrawn vs balance are strictly accurate
+    await syncWalletBalance(wRequest.user_id);
+
     res.json({ success: true, withdrawal: data });
   } catch (err) {
     console.error('Error processing withdrawal:', err.message);
@@ -333,12 +512,13 @@ router.get('/sales-history', verifyAuth, resolveAnyRole, async (req, res) => {
       const items = Array.isArray(order.items) ? order.items : [];
       items.forEach(item => {
         const isItemDesigner = (item.designerId && item.designerId === designerId) ||
+                               (item.designer_id && item.designer_id === designerId) ||
                                (!item.isMfgProduct && order.designer_id === designerId);
 
         if (isItemDesigner) {
           const qty = Number(item.qty) || 1;
           const itemPrice = Number(item.price) || 0;
-          let royaltyPerItem = Number(item.designerRoyalty) || Number(item.designerCost) || 0;
+          let royaltyPerItem = Number(item.designer_price) || Number(item.designerRoyalty) || Number(item.designerCost) || 0;
           if (!royaltyPerItem) {
             royaltyPerItem = Math.round((Number(order.designer_earnings) || 0) / (items.length || 1) / qty);
           }

@@ -25,7 +25,13 @@ router.get('/', async (req, res) => {
       .in('status', ['approved', 'active']);
 
     if (designerId) {
-      query = query.eq('designer_id', designerId);
+      const cleanDesigner = String(designerId).trim().replace(/^@/, '');
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (uuidRegex.test(cleanDesigner)) {
+        query = query.eq('designer_id', cleanDesigner);
+      } else {
+        query = query.ilike('designer_username', cleanDesigner);
+      }
     }
 
     let orderColumn = 'created_at';

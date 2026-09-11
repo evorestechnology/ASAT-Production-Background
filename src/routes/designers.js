@@ -38,7 +38,23 @@ router.get('/rankings', async (req, res) => {
 
 // GET /api/designers/me - Get logged-in designer's profile
 router.get('/me', verifyAuth, verifyDesigner, async (req, res) => {
-  res.json(req.designerData);
+  try {
+    const designer = { ...req.designerData };
+    let meta = req.user?.user_metadata;
+    if (!meta) {
+      const { data: userData } = await supabaseAdmin.auth.admin.getUserById(req.uid);
+      meta = userData?.user?.user_metadata || {};
+    }
+    designer.bio = meta.bio || meta.description || designer.bio || '';
+    designer.description = meta.bio || meta.description || designer.description || '';
+    designer.instagram = meta.instagram || designer.instagram || '';
+    designer.linkedin = meta.linkedin || designer.linkedin || '';
+    designer.upi_id = meta.upi_id || designer.upi_id || '';
+    designer.paypal_id = meta.paypal_id || designer.paypal_id || '';
+    res.json(designer);
+  } catch (err) {
+    res.json(req.designerData);
+  }
 });
 
 // PUT /api/designers/me - Update own profile (designer)
@@ -94,15 +110,6 @@ router.put('/me', verifyAuth, verifyDesigner, async (req, res) => {
     if (gender !== undefined) updatePayload.gender = gender;
     if (dob !== undefined) updatePayload.dob = dob;
     if (avatar_url !== undefined) updatePayload.avatar_url = avatar_url;
-    if (upi_id !== undefined) updatePayload.upi_id = upi_id;
-    if (paypal_id !== undefined) updatePayload.paypal_id = paypal_id;
-    if (description !== undefined) {
-      updatePayload.description = description;
-    } else if (bio !== undefined) {
-      updatePayload.description = bio;
-    }
-    if (instagram !== undefined) updatePayload.instagram = instagram;
-    if (linkedin !== undefined) updatePayload.linkedin = linkedin;
     if (terms_accepted !== undefined) updatePayload.terms_accepted = terms_accepted;
     if (terms_accepted_at !== undefined) updatePayload.terms_accepted_at = terms_accepted_at;
 
@@ -121,6 +128,7 @@ router.put('/me', verifyAuth, verifyDesigner, async (req, res) => {
       updatePayload.username = trimmedUsername;
     }
 
+    // Try updating physical columns in designers table
     let { data, error } = await supabaseAdmin
       .from('designers')
       .update(updatePayload)
@@ -128,25 +136,45 @@ router.put('/me', verifyAuth, verifyDesigner, async (req, res) => {
       .select()
       .single();
 
-    if (error && error.message && error.message.includes('column')) {
-      // Column might not exist in table schema; strip unexisting columns and retry
-      delete updatePayload.upi_id;
-      delete updatePayload.paypal_id;
-      delete updatePayload.description;
-      delete updatePayload.instagram;
-      delete updatePayload.linkedin;
-      const retry = await supabaseAdmin
-        .from('designers')
-        .update(updatePayload)
-        .eq('id', req.uid)
-        .select()
-        .single();
-      data = retry.data;
-      error = retry.error;
+    if (error) throw error;
+
+    // Save bio, instagram, linkedin, upi_id, paypal_id into auth user_metadata
+    try {
+      const userMetaUpdate = {};
+      const finalBio = description !== undefined ? description : bio;
+      if (finalBio !== undefined) {
+        userMetaUpdate.bio = finalBio;
+        userMetaUpdate.description = finalBio;
+      }
+      if (instagram !== undefined) userMetaUpdate.instagram = instagram;
+      if (linkedin !== undefined) userMetaUpdate.linkedin = linkedin;
+      if (upi_id !== undefined) userMetaUpdate.upi_id = upi_id;
+      if (paypal_id !== undefined) userMetaUpdate.paypal_id = paypal_id;
+      if (full_name !== undefined) userMetaUpdate.full_name = full_name;
+
+      if (Object.keys(userMetaUpdate).length > 0) {
+        const { data: userCurrent } = await supabaseAdmin.auth.admin.getUserById(req.uid);
+        const existingMeta = userCurrent?.user?.user_metadata || {};
+        await supabaseAdmin.auth.admin.updateUserById(req.uid, {
+          user_metadata: { ...existingMeta, ...userMetaUpdate }
+        });
+      }
+    } catch (metaErr) {
+      console.warn('Could not update designer user_metadata:', metaErr.message);
     }
 
-    if (error) throw error;
-    res.json({ success: true, profile: data });
+    res.json({
+      success: true,
+      profile: {
+        ...data,
+        bio: bio !== undefined ? bio : description,
+        description: description !== undefined ? description : bio,
+        instagram,
+        linkedin,
+        upi_id,
+        paypal_id
+      }
+    });
   } catch (err) {
     console.error('Error updating designer profile:', err.message);
     res.status(500).json({ error: 'Failed to update profile' });
@@ -156,19 +184,69 @@ router.put('/me', verifyAuth, verifyDesigner, async (req, res) => {
 // GET /api/designers/:id - Public details of a designer
 router.get('/:id', async (req, res) => {
   try {
-    const { id } = req.params;
-    
-    // Support lookup by either id (UUID) or username
-    const column = id.length === 36 ? 'id' : 'username';
-
-    const { data, error } = await supabaseAdmin
-      .from('designers')
-      .select('id, username, full_name, avatar_url, description, instagram, linkedin, designs_count, total_earnings, points, created_at, status')
-      .eq(column, id)
-      .single();
-
-    if (error || !data) {
+    const rawId = req.params.id;
+    if (!rawId || rawId === 'undefined' || rawId === 'null') {
       return res.status(404).json({ error: 'Designer not found' });
+    }
+
+    let clean = decodeURIComponent(rawId).trim();
+    if (clean.startsWith('@')) clean = clean.substring(1).trim();
+
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    let data = null;
+
+    // 1. If valid UUID, search by ID first
+    if (uuidRegex.test(clean)) {
+      const { data: byId } = await supabaseAdmin
+        .from('designers')
+        .select('id, username, full_name, avatar_url, designs_count, total_earnings, points, created_at, status, address, contact, country')
+        .eq('id', clean)
+        .maybeSingle();
+
+      if (byId) data = byId;
+    }
+
+    // 2. Search case-insensitively by username
+    if (!data) {
+      const { data: byUsername } = await supabaseAdmin
+        .from('designers')
+        .select('id, username, full_name, avatar_url, designs_count, total_earnings, points, created_at, status, address, contact, country')
+        .ilike('username', clean)
+        .maybeSingle();
+
+      if (byUsername) data = byUsername;
+    }
+
+    // 3. Fallback search by full_name
+    if (!data) {
+      const { data: byName } = await supabaseAdmin
+        .from('designers')
+        .select('id, username, full_name, avatar_url, designs_count, total_earnings, points, created_at, status, address, contact, country')
+        .ilike('full_name', clean)
+        .maybeSingle();
+
+      if (byName) data = byName;
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: 'Designer not found' });
+    }
+
+    // Retrieve bio, instagram, linkedin from auth user metadata
+    let bio = '';
+    let instagram = '';
+    let linkedin = '';
+    try {
+      const { data: userData } = await supabaseAdmin.auth.admin.getUserById(data.id);
+      if (userData?.user?.user_metadata) {
+        const meta = userData.user.user_metadata;
+        bio = meta.bio || meta.description || '';
+        instagram = meta.instagram || '';
+        linkedin = meta.linkedin || '';
+      }
+    } catch (uErr) {
+      console.warn('Could not fetch user metadata for designer:', uErr.message);
     }
 
     // Compute designer rank from leaderboard
@@ -191,6 +269,10 @@ router.get('/:id', async (req, res) => {
 
     res.json({
       ...data,
+      bio,
+      description: bio,
+      instagram,
+      linkedin,
       rank,
       ranking: rank
     });

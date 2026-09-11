@@ -1,6 +1,7 @@
 import express from 'express';
 import { supabaseAdmin } from '../supabaseAdmin.js';
 import { verifyAuth, verifyAdmin, verifyDesigner, verifyMfg } from '../middleware/auth.js';
+import { syncWalletBalance } from './wallets.js';
 
 const router = express.Router();
 
@@ -34,15 +35,15 @@ router.get('/admin', verifyAuth, verifyAdmin, async (req, res) => {
 // GET /api/dashboard/designer - Designer dashboard data (designer only)
 router.get('/designer', verifyAuth, verifyDesigner, async (req, res) => {
   try {
-    const [designsRes, ordersRes, walletRes] = await Promise.all([
+    const syncedWallet = await syncWalletBalance(req.uid).catch(() => null);
+
+    const [designsRes, ordersRes] = await Promise.all([
       supabaseAdmin.from('designs').select('*').eq('designer_id', req.uid),
-      supabaseAdmin.from('orders').select('*').eq('designer_id', req.uid),
-      supabaseAdmin.from('wallets').select('balance, total_earnings').eq('id', req.uid).maybeSingle()
+      supabaseAdmin.from('orders').select('*').eq('designer_id', req.uid)
     ]);
 
     if (designsRes.error) throw designsRes.error;
     if (ordersRes.error) throw ordersRes.error;
-    if (walletRes.error) throw walletRes.error;
 
     res.json({
       designs: designsRes.data || [],
@@ -50,7 +51,7 @@ router.get('/designer', verifyAuth, verifyDesigner, async (req, res) => {
       profile: {
         points: req.designerData.points || 0,
         total_earnings: req.designerData.total_earnings || 0,
-        wallet: walletRes.data || { balance: 0, total_earnings: 0 }
+        wallet: syncedWallet || { balance: 0, total_earnings: 0, pending_balance: 0 }
       }
     });
   } catch (err) {
@@ -62,19 +63,20 @@ router.get('/designer', verifyAuth, verifyDesigner, async (req, res) => {
 // GET /api/dashboard/mfg - Manufacturer dashboard data (mfg only)
 router.get('/mfg', verifyAuth, verifyMfg, async (req, res) => {
   try {
-    const [ordersRes, walletRes] = await Promise.all([
-      supabaseAdmin.from('orders').select('*').eq('mfg_id', req.uid),
-      supabaseAdmin.from('wallets').select('balance, total_earnings').eq('id', req.uid).maybeSingle()
-    ]);
+    const syncedWallet = await syncWalletBalance(req.uid).catch(() => null);
 
-    if (ordersRes.error) throw ordersRes.error;
-    if (walletRes.error) throw walletRes.error;
+    const { data: orders, error: ordersErr } = await supabaseAdmin
+      .from('orders')
+      .select('*')
+      .eq('mfg_id', req.uid);
+
+    if (ordersErr) throw ordersErr;
 
     res.json({
-      orders: ordersRes.data || [],
+      orders: orders || [],
       profile: {
         business_name: req.mfgData.business_name,
-        wallet: walletRes.data || { balance: 0, total_earnings: 0 }
+        wallet: syncedWallet || { balance: 0, total_earnings: 0, pending_balance: 0 }
       }
     });
   } catch (err) {

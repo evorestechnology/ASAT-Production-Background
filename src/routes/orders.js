@@ -328,7 +328,8 @@ router.post('/', async (req, res) => {
       }
     }
 
-    const computedPlatformEarnings = Math.max(0, total_amount - computedMfgEarnings - computedDesignerEarnings);
+    const finalTotal = Math.max(Number(total_amount) || 0, computedMfgEarnings + computedDesignerEarnings);
+    const computedPlatformEarnings = Math.max(0, finalTotal - computedMfgEarnings - computedDesignerEarnings);
 
     const initialStatus = req.body.status || (req.body.payment_status === 'PAID' ? 'confirmed' : 'pending');
 
@@ -337,7 +338,7 @@ router.post('/', async (req, res) => {
       user_id: user_id || null,
       customer_name,
       items,
-      total_amount,
+      total_amount: finalTotal,
       designer_earnings: computedDesignerEarnings,
       mfg_earnings: computedMfgEarnings,
       platform_earnings: computedPlatformEarnings,
@@ -426,6 +427,9 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
     // If manufacturer reported "Can't Be Done", keep status as 'issue_reported' (pending admin review)
     // Admin will approve/reject via the separate /approve-cancellation endpoint
     let finalStatus = status;
+    if (finalStatus === 'in_progress') {
+      finalStatus = 'manufacturing';
+    }
     if (req.role === 'mfg' && (cant_be_done_reason || status === 'cant_be_done')) {
       finalStatus = 'issue_reported';
     }
@@ -484,7 +488,7 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
 
     if (error) throw error;
 
-    // Immediately credit and sync designer wallet balance upon delivery
+    // Immediately credit and sync designer and manufacturer wallet balances upon delivery
     if (finalStatus === 'completed' || finalStatus === 'delivered') {
       const dId = updatedOrder?.designer_id || order?.designer_id;
       if (dId) {
@@ -492,6 +496,30 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
           await syncWalletBalance(dId);
         } catch (wErr) {
           console.error('Error syncing designer wallet upon order delivery:', wErr.message);
+        }
+      }
+
+      const mId = updatedOrder?.mfg_id || order?.mfg_id;
+      if (mId) {
+        try {
+          await syncWalletBalance(mId);
+        } catch (wErr) {
+          console.error('Error syncing mfg wallet upon order delivery:', wErr.message);
+        }
+      }
+
+      // Check other item-level designers if present
+      const orderItems = Array.isArray(order?.items) ? order.items : [];
+      const checkedDesigners = new Set([dId]);
+      for (const item of orderItems) {
+        const itemDId = item.designer_id || item.designerId;
+        if (itemDId && !checkedDesigners.has(itemDId)) {
+          checkedDesigners.add(itemDId);
+          try {
+            await syncWalletBalance(itemDId);
+          } catch (wErr) {
+            console.error('Error syncing item designer wallet upon delivery:', wErr.message);
+          }
         }
       }
     }
@@ -765,8 +793,11 @@ router.post('/:id/cost-adjustment/review', verifyAuth, resolveAnyRole, async (re
         time: new Date().toISOString()
       };
 
+      const newPlatformEarnings = Math.max(0, Number(order.total_amount || 0) - newMfgEarnings - Number(order.designer_earnings || 0));
+
       const payload = {
         mfg_earnings: newMfgEarnings,
+        platform_earnings: newPlatformEarnings,
         status_history: [...history, historyEntry],
         updated_at: new Date().toISOString()
       };
@@ -780,12 +811,10 @@ router.post('/:id/cost-adjustment/review', verifyAuth, resolveAnyRole, async (re
 
       if (updateErr) throw updateErr;
 
-      // Credit Manufacturer Wallet immediately with approved amount
-      if (order.mfg_id && adjAmount > 0) {
-        await updateWallet('mfg', order.mfg_id, adjAmount);
+      // Resync Manufacturer Wallet immediately
+      if (order.mfg_id) {
+        await syncWalletBalance(order.mfg_id);
       }
-      // Update Master Admin Ledger/Wallet as well
-      await updateWallet('admin', req.uid || 'admin', adjAmount);
 
       // Close open cost adjustment ticket if present
       try {

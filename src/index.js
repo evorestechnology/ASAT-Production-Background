@@ -453,6 +453,8 @@ app.post('/api/auth/register-designer', async (req, res) => {
       password,
       otp,
       fullName,
+      firstName,
+      secondName,
       username,
       contact,
       countryCode,
@@ -468,6 +470,17 @@ app.post('/api/auth/register-designer', async (req, res) => {
       termsAccepted,
     } = req.body;
 
+    const computedFullName = (fullName || `${firstName || ''} ${secondName || ''}`).trim();
+
+    let finalUsername = (username || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    if (!finalUsername || finalUsername.length < 3) {
+      let base = (firstName ? `${firstName}${secondName ? '_' + secondName : ''}` : (computedFullName || 'designer'))
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+      if (!base || base.length < 2) base = 'designer';
+      finalUsername = `${base.slice(0, 12)}_${Date.now().toString().slice(-4)}`;
+    }
+
     // Input validation
     const validationErrors = {};
     if (!email || !validateEmail(email)) {
@@ -479,10 +492,10 @@ app.post('/api/auth/register-designer', async (req, res) => {
     if (!otp || otp.length !== 6 || !/^\d+$/.test(otp)) {
       validationErrors.otp = 'Valid 6-digit OTP is required';
     }
-    if (!fullName || fullName.trim().length < 2) {
-      validationErrors.fullName = 'Full name must be at least 2 characters long';
+    if (!computedFullName || computedFullName.length < 2) {
+      validationErrors.fullName = 'Full name (or first & second name) must be at least 2 characters long';
     }
-    if (!username || !validateUsername(username)) {
+    if (!finalUsername || !validateUsername(finalUsername)) {
       validationErrors.username = 'Username must be 3-20 characters (letters, numbers, underscore, hyphen only)';
     }
     if (!description || description.trim().length < 5) {
@@ -530,11 +543,23 @@ app.post('/api/auth/register-designer', async (req, res) => {
     // OTP is valid! Delete it.
     await supabaseAdmin.from('otps').delete().eq('email', email);
 
-    // 2. Create Auth User (Confirm email automatically)
+    // 2. Create Auth User (Confirm email automatically) with user_metadata
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email: email.trim(),
       password: password,
       email_confirm: true,
+      user_metadata: {
+        full_name: computedFullName,
+        first_name: firstName || '',
+        second_name: secondName || '',
+        username: finalUsername,
+        description: description ? description.trim() : '',
+        bio: description ? description.trim() : '',
+        instagram: instagram ? instagram.trim() : '',
+        linkedin: linkedin ? linkedin.trim() : '',
+        upi_id: upiId ? upiId.trim() : '',
+        paypal_id: paypalId ? paypalId.trim() : ''
+      }
     });
 
     if (authError || !authData?.user) {
@@ -546,9 +571,9 @@ app.post('/api/auth/register-designer', async (req, res) => {
     // 3. Insert Designer Profile
     const designerPayload = {
       id: uid,
-      full_name: fullName,
+      full_name: computedFullName,
       email: email.trim().toLowerCase(),
-      username: username.trim(),
+      username: finalUsername,
       contact: contact || null,
       country_code: countryCode || null,
       gender: gender || null,
