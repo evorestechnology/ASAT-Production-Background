@@ -10,6 +10,19 @@ function decorateOrderWithCostAdjustment(order) {
   if (!order) return order;
   const history = Array.isArray(order.status_history) ? order.status_history : [];
   
+  // Hoist tax and shipping from pricing snapshot if not directly on the record
+  const pricing = history[0]?.pricing || {};
+  if (order.shipping_amount === undefined || order.shipping_amount === null) {
+    if (pricing.shipping_amount !== undefined) {
+      order.shipping_amount = Number(pricing.shipping_amount) || 0;
+    }
+  }
+  if (order.tax_amount === undefined || order.tax_amount === null) {
+    if (pricing.tax_amount !== undefined) {
+      order.tax_amount = Number(pricing.tax_amount) || 0;
+    }
+  }
+  
   let latestRequest = null;
   let latestApproval = null;
   let latestRejection = null;
