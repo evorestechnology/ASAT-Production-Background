@@ -8,11 +8,12 @@ const router = express.Router();
 // GET /api/dashboard/admin - Admin dashboard data (admin only)
 router.get('/admin', verifyAuth, verifyAdmin, async (req, res) => {
   try {
-    const [ordersRes, designersRes, designsRes, ticketsRes] = await Promise.all([
+    const [ordersRes, designersRes, designsRes, ticketsRes, mfgRes] = await Promise.all([
       supabaseAdmin.from('orders').select('*'),
       supabaseAdmin.from('designers').select('*'),
       supabaseAdmin.from('designs').select('*'),
-      supabaseAdmin.from('tickets').select('*')
+      supabaseAdmin.from('tickets').select('*'),
+      supabaseAdmin.from('manufacturers').select('*')
     ]);
 
     if (ordersRes.error) throw ordersRes.error;
@@ -24,7 +25,8 @@ router.get('/admin', verifyAuth, verifyAdmin, async (req, res) => {
       orders: ordersRes.data || [],
       designers: designersRes.data || [],
       designs: designsRes.data || [],
-      tickets: ticketsRes.data || []
+      tickets: ticketsRes.data || [],
+      manufacturers: mfgRes?.data || []
     });
   } catch (err) {
     console.error('Error fetching admin dashboard stats:', err.message);

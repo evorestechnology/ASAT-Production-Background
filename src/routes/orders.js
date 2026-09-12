@@ -528,7 +528,6 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
       
       if (finalStatus === 'completed' || finalStatus === 'delivered') {
         payload.completed_at = new Date().toISOString();
-        payload.delivered_at = new Date().toISOString();
       } else if (finalStatus === 'shipping') {
         payload.shipped_at = new Date().toISOString();
       }
