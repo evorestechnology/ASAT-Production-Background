@@ -155,7 +155,7 @@ Thank you for your patience and understanding.
 
 Regards,
 Customer Support Team
-As Simple as That`;
+ASAT Designer Paradise`;
 
     // Query a real admin user ID if exists, otherwise fall back to a dummy UUID
     let adminSenderId = '00000000-0000-0000-0000-000000000000';

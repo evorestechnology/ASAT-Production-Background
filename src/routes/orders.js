@@ -356,7 +356,16 @@ router.post('/', async (req, res) => {
       address: address || '',
       country: country || 'India',
       tracking_id: '',
-      status_history: [{ status: initialStatus, time: new Date().toISOString() }],
+      status_history: [{
+        status: initialStatus,
+        time: new Date().toISOString(),
+        pricing: {
+          subtotal: items && Array.isArray(items) ? items.reduce((s, i) => s + ((Number(i.price) || 0) * (Number(i.qty) || 1)), 0) : 0,
+          shipping_amount: Number(req.body.shipping_amount) || 0,
+          tax_amount: Number(req.body.tax_amount) || 0,
+          total_amount: finalTotal
+        }
+      }],
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };

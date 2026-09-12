@@ -176,7 +176,7 @@ app.post('/api/auth/send-otp', async (req, res) => {
               
               <p style="font-size: 13px; color: #888888; line-height: 1.6;">This code is valid for the next 5 minutes. If you did not request this verification, please ignore this email.</p>
               <hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.08); margin: 30px 0;">
-              <p style="font-size: 11px; text-align: center; color: #666666; letter-spacing: 1px;">As Simple as That &bull; curated designer streetwear</p>
+              <p style="font-size: 11px; text-align: center; color: #666666; letter-spacing: 1px;">ASAT Designer Paradise &bull; curated designer streetwear</p>
             </div>
           `,
         };
