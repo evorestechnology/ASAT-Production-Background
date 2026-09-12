@@ -12,9 +12,11 @@ const getCashfreeBaseUrl = () => {
 // POST /api/payment/create-order - Create Cashfree Order & Payment Session
 router.post('/create-order', optionalAuth, async (req, res) => {
   try {
-    const { amount, customerName, customerEmail, customerPhone, cartItems, shippingAddress } = req.body;
+    const { customerName, customerEmail, customerPhone, cartItems, shippingAddress } = req.body;
+    const rawAmount = req.body.amount !== undefined ? req.body.amount : req.body.orderAmount;
+    const amount = Number(rawAmount);
 
-    if (!amount || amount <= 0) {
+    if (!amount || amount <= 0 || isNaN(amount)) {
       return res.status(400).json({ error: 'Valid payment amount is required.' });
     }
 

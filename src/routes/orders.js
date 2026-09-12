@@ -333,18 +333,23 @@ router.post('/', async (req, res) => {
 
     const initialStatus = req.body.status || (req.body.payment_status === 'PAID' ? 'confirmed' : 'pending');
 
+    const isValidUUID = (str) => typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    const safeUserId = isValidUUID(user_id) ? user_id : null;
+    const safeDesignerId = isValidUUID(designer_id) ? designer_id : null;
+    const safeMfgId = isValidUUID(mfg_id) ? mfg_id : null;
+
     const payload = {
       order_id,
-      user_id: user_id || null,
+      user_id: safeUserId,
       customer_name,
       items,
       total_amount: finalTotal,
       designer_earnings: computedDesignerEarnings,
       mfg_earnings: computedMfgEarnings,
       platform_earnings: computedPlatformEarnings,
-      designer_id: designer_id || null,
+      designer_id: safeDesignerId,
       designer_username: designer_username || 'anonymous',
-      mfg_id: mfg_id || null,
+      mfg_id: safeMfgId,
       status: initialStatus,
       contact: contact || '',
       phone: phone || '',
@@ -356,11 +361,36 @@ router.post('/', async (req, res) => {
       updated_at: new Date().toISOString()
     };
 
-    const { data, error } = await supabaseAdmin
+    // Check if order already exists with this order_id (idempotent creation)
+    const { data: existingOrder } = await supabaseAdmin
       .from('orders')
-      .insert(payload)
-      .select()
-      .single();
+      .select('*')
+      .eq('order_id', order_id)
+      .maybeSingle();
+
+    let data, error;
+    if (existingOrder) {
+      const updateRes = await supabaseAdmin
+        .from('orders')
+        .update({
+          ...payload,
+          created_at: existingOrder.created_at,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existingOrder.id)
+        .select()
+        .single();
+      data = updateRes.data;
+      error = updateRes.error;
+    } else {
+      const insertRes = await supabaseAdmin
+        .from('orders')
+        .insert(payload)
+        .select()
+        .single();
+      data = insertRes.data;
+      error = insertRes.error;
+    }
 
     if (error) throw error;
 
@@ -403,10 +433,13 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
     const { id } = req.params;
     const { status, tracking_id, shipping_partner, mfg_id, cant_be_done_reason, termination_reason } = req.body;
 
+    const isUUID = typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    const column = isUUID ? 'id' : 'order_id';
+
     const { data: order, error: fetchError } = await supabaseAdmin
       .from('orders')
       .select('*')
-      .eq('id', id)
+      .eq(column, id)
       .single();
 
     if (fetchError || !order) {
@@ -482,7 +515,7 @@ router.put('/:id', verifyAuth, resolveAnyRole, async (req, res) => {
     const { data: updatedOrder, error } = await supabaseAdmin
       .from('orders')
       .update(payload)
-      .eq('id', id)
+      .eq('id', order.id)
       .select()
       .single();
 
@@ -905,14 +938,21 @@ router.post('/:id/customer-cancel', verifyAuth, resolveAnyRole, async (req, res)
     const { id } = req.params;
     const { reason } = req.body;
 
+    const isUUID = typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    const column = isUUID ? 'id' : 'order_id';
+
     const { data: order, error: fetchErr } = await supabaseAdmin
       .from('orders')
       .select('*')
-      .eq('id', id)
+      .eq(column, id)
       .single();
 
     if (fetchErr || !order) {
       return res.status(404).json({ error: 'Order not found.' });
+    }
+
+    if (req.role !== 'admin' && order.user_id && order.user_id !== req.uid) {
+      return res.status(403).json({ error: 'You can only cancel your own orders.' });
     }
 
     if (order.status === 'cancelled') {
@@ -948,11 +988,19 @@ router.post('/:id/customer-cancel', verifyAuth, resolveAnyRole, async (req, res)
     const { data: updatedOrder, error: updateErr } = await supabaseAdmin
       .from('orders')
       .update(payload)
-      .eq('id', id)
+      .eq('id', order.id)
       .select()
       .single();
 
     if (updateErr) throw updateErr;
+
+    // Resync wallets so pending or eligible earnings are cleared
+    if (order.designer_id) {
+      try { await syncWalletBalance(order.designer_id); } catch (_) {}
+    }
+    if (order.mfg_id) {
+      try { await syncWalletBalance(order.mfg_id); } catch (_) {}
+    }
 
     // Send confirmation email to customer
     try {
