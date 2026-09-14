@@ -612,4 +612,159 @@ router.post('/admins/invite', verifyAuth, verifyAdmin, async (req, res) => {
   }
 });
 
+// A) GET /api/users/search (admin only)
+router.get('/search', verifyAuth, verifyAdmin, async (req, res) => {
+  try {
+    const { q = '', page = 1, limit = 20, filter = 'all' } = req.query;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.max(1, parseInt(limit, 10) || 20);
+    const offset = (pageNum - 1) * limitNum;
+
+    let query = supabaseAdmin.from('users').select('id, full_name, email, phone, created_at, updated_at', { count: 'exact' });
+    
+    if (q && q.trim()) {
+      const searchTerm = q.trim();
+      query = query.or(`full_name.ilike.%${searchTerm}%,email.ilike.%${searchTerm}%,phone.ilike.%${searchTerm}%`);
+    }
+    
+    const { data: users, count: total, error } = await query
+      .range(offset, offset + limitNum - 1)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    const userList = users || [];
+    const userIds = userList.map(u => u.id);
+    let addressMap = {};
+
+    if (userIds.length > 0) {
+      const { data: addrList } = await supabaseAdmin
+        .from('user_addresses')
+        .select('user_id, country, city, state, line1')
+        .in('user_id', userIds);
+      if (addrList) {
+        addrList.forEach(a => {
+          if (!addressMap[a.user_id]) {
+            addressMap[a.user_id] = {
+              country: a.country || 'India',
+              address: `${a.line1 ? a.line1 + ', ' : ''}${a.city || ''}`
+            };
+          }
+        });
+      }
+    }
+
+    // Get order counts for each user
+    let usersWithOrderCount = await Promise.all(userList.map(async (u) => {
+      const { count } = await supabaseAdmin.from('orders').select('id', { count: 'exact', head: true }).eq('user_id', u.id);
+      return { 
+        ...u, 
+        country: addressMap[u.id]?.country || 'India',
+        address: addressMap[u.id]?.address || '',
+        order_count: count || 0 
+      };
+    }));
+
+    if (filter === 'with_orders') {
+      usersWithOrderCount = usersWithOrderCount.filter(u => u.order_count > 0);
+    } else if (filter === 'no_orders') {
+      usersWithOrderCount = usersWithOrderCount.filter(u => u.order_count === 0);
+    }
+
+    res.json({
+      users: usersWithOrderCount,
+      total: total || 0,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil((total || 0) / limitNum)
+    });
+  } catch (err) {
+    console.error('Error in /api/users/search:', err);
+    res.status(500).json({ error: err.message || 'Failed to search users' });
+  }
+});
+
+// B) GET /api/users/:id/profile (admin only)
+router.get('/:id/profile', verifyAuth, verifyAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const { data: user, error: userError } = await supabaseAdmin.from('users').select('*').eq('id', id).maybeSingle();
+    if (userError) throw userError;
+    
+    const { data: wallet } = await supabaseAdmin.from('wallets').select('balance').eq('user_id', id).maybeSingle();
+    const { count: orderCount } = await supabaseAdmin.from('orders').select('id', { count: 'exact', head: true }).eq('user_id', id);
+    const { count: ticketCount } = await supabaseAdmin.from('tickets').select('id', { count: 'exact', head: true }).eq('user_id', id);
+    const { data: addresses } = await supabaseAdmin.from('user_addresses').select('*').eq('user_id', id);
+
+    const primaryAddress = addresses?.[0];
+
+    res.json({
+      ...(user || {}),
+      country: primaryAddress?.country || 'India',
+      address: primaryAddress ? `${primaryAddress.line1 ? primaryAddress.line1 + ', ' : ''}${primaryAddress.city || ''}` : '',
+      wallet_balance: wallet?.balance || 0,
+      order_count: orderCount || 0,
+      ticket_count: ticketCount || 0,
+      addresses: addresses || []
+    });
+  } catch (err) {
+    console.error('Error in /api/users/:id/profile:', err);
+    res.status(500).json({ error: err.message || 'Failed to get user profile' });
+  }
+});
+
+// C) GET /api/users/:id/orders (admin only)
+router.get('/:id/orders', verifyAuth, verifyAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const { data: orders, error } = await supabaseAdmin
+      .from('orders')
+      .select('id, order_id, created_at, total_amount, status, items, country, address')
+      .eq('user_id', id)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.json(orders);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// D) GET /api/users/:id/activity (admin only)
+router.get('/:id/activity', verifyAuth, verifyAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const { data: orders, error: ordersError } = await supabaseAdmin
+      .from('orders')
+      .select('id, order_id, created_at, total_amount, status')
+      .eq('user_id', id);
+
+    if (ordersError) throw ordersError;
+
+    const { data: tickets, error: ticketsError } = await supabaseAdmin
+      .from('tickets')
+      .select('id, created_at, subject, status')
+      .eq('user_id', id);
+
+    if (ticketsError) throw ticketsError;
+
+    const activities = [
+      ...(orders || []).map(o => ({ ...o, type: 'order' })),
+      ...(tickets || []).map(t => ({ ...t, type: 'ticket' }))
+    ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+    res.json({
+      activities,
+      totalOrders: orders?.length || 0,
+      totalTickets: tickets?.length || 0
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

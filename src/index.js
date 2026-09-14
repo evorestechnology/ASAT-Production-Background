@@ -41,7 +41,8 @@ import dashboardRouter from './routes/dashboard.js';
 import activityRouter from './routes/activity.js';
 import currencyRouter from './routes/currency.js';
 import paymentRouter from './routes/payment.js';
-
+import promosRouter from './routes/promos.js';
+import reportsRouter from './routes/reports.js';
 const app = express();
 
 // Configure CORS to support requests from the client SPA
@@ -905,6 +906,8 @@ app.use('/api/activity', activityRouter);
 app.use('/api/currency', currencyRouter);
 app.use('/api/payment', paymentRouter);
 app.use('/api/tutorials', tutorialsRouter);
+app.use('/api/promos', promosRouter);
+app.use('/api/reports', reportsRouter);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

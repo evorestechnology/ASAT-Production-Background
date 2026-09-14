@@ -372,12 +372,14 @@ router.post('/', async (req, res) => {
       status_history: [{
         status: initialStatus,
         time: new Date().toISOString(),
-        pricing: {
-          subtotal: items && Array.isArray(items) ? items.reduce((s, i) => s + ((Number(i.price) || 0) * (Number(i.qty) || 1)), 0) : 0,
-          shipping_amount: Number(req.body.shipping_amount) || 0,
-          tax_amount: Number(req.body.tax_amount) || 0,
-          total_amount: finalTotal
-        }
+          pricing: {
+            subtotal: items && Array.isArray(items) ? items.reduce((s, i) => s + ((Number(i.price) || 0) * (Number(i.qty) || 1)), 0) : 0,
+            discount_amount: Number(req.body.discount_amount) || 0,
+            promo_code: req.body.promo_code || null,
+            shipping_amount: Number(req.body.shipping_amount) || 0,
+            tax_amount: Number(req.body.tax_amount) || 0,
+            total_amount: finalTotal
+          }
       }],
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
