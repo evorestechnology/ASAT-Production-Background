@@ -3,6 +3,7 @@ import { supabaseAdmin } from '../supabaseAdmin.js';
 import { verifyAuth, resolveAnyRole } from '../middleware/auth.js';
 import { sendOrderCancellationEmail } from '../utils/mailer.js';
 import { syncWalletBalance } from './wallets.js';
+import { getStoredPromos, saveStoredPromos } from './promos.js';
 
 const router = express.Router();
 
@@ -417,6 +418,30 @@ router.post('/', async (req, res) => {
     }
 
     if (error) throw error;
+
+    // Record promo code usage if applicable
+    if (req.body.promo_code && safeUserId) {
+      try {
+        const promos = await getStoredPromos();
+        let updated = false;
+        const pcode = req.body.promo_code.trim().toUpperCase();
+        for (let p of promos) {
+          if (p.code.toUpperCase() === pcode) {
+            if (!p.usedBy) p.usedBy = [];
+            if (!p.usedBy.includes(safeUserId)) {
+              p.usedBy.push(safeUserId);
+              updated = true;
+            }
+            break;
+          }
+        }
+        if (updated) {
+          await saveStoredPromos(promos);
+        }
+      } catch (e) {
+        console.error('Failed to record promo usage:', e);
+      }
+    }
 
     // Award points to designer (10 points per qty)
     if (items && Array.isArray(items)) {

@@ -16,6 +16,8 @@ const DEFAULT_PROMOS = [
     minOrderAmount: 0,
     expiresAt: null, // No expiry
     isActive: true,
+    type: 'public', // 'public' or 'private'
+    usedBy: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   }
@@ -24,7 +26,7 @@ const DEFAULT_PROMOS = [
 /**
  * Helper: Retrieve promo codes from the settings table
  */
-async function getStoredPromos() {
+export async function getStoredPromos() {
   try {
     const { data, error } = await supabaseAdmin
       .from('settings')
@@ -57,7 +59,7 @@ async function getStoredPromos() {
 /**
  * Helper: Save promo codes to the settings table
  */
-async function saveStoredPromos(promosList) {
+export async function saveStoredPromos(promosList) {
   const { error } = await supabaseAdmin
     .from('settings')
     .upsert({
@@ -93,8 +95,30 @@ router.get('/', async (req, res) => {
   }
 });
 
+// ── GET /api/promos/public - Fetch active public promo codes for customer ────────────────
+router.get('/public', verifyAuth, async (req, res) => {
+  try {
+    const promos = await getStoredPromos();
+    const now = new Date();
+    
+    // Filter only active, non-expired, public promos that the user hasn't used
+    const publicPromos = promos.filter((p) => {
+      if (!p.isActive) return false;
+      if (p.type === 'private') return false;
+      if (p.expiresAt && new Date(p.expiresAt) < now) return false;
+      if (p.usedBy && p.usedBy.includes(req.uid)) return false;
+      return true;
+    });
+
+    res.json(publicPromos);
+  } catch (err) {
+    console.error('GET /api/promos/public error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch public promo codes' });
+  }
+});
+
 // ── POST /api/promos/validate - Customer validation endpoint ─────────────────
-router.post('/validate', async (req, res) => {
+router.post('/validate', verifyAuth, async (req, res) => {
   try {
     const { code, subtotal = 0 } = req.body;
     if (!code || !code.trim()) {
@@ -114,6 +138,12 @@ router.post('/validate', async (req, res) => {
 
     if (!match.isActive) {
       const msg = 'This promo code is currently deactivated.';
+      return res.status(400).json({ valid: false, error: msg, message: msg });
+    }
+
+    // Check if used by this user already
+    if (match.usedBy && match.usedBy.includes(req.uid)) {
+      const msg = 'You have already used this promo code.';
       return res.status(400).json({ valid: false, error: msg, message: msg });
     }
 
@@ -173,6 +203,7 @@ router.post('/', verifyAuth, verifyAdmin, async (req, res) => {
       expiresAt = null,
       isActive = true,
       description = '',
+      type = 'public',
       minOrderAmount = 0
     } = req.body;
 
@@ -215,6 +246,8 @@ router.post('/', verifyAuth, verifyAdmin, async (req, res) => {
       minOrderAmount: Math.max(0, Number(minOrderAmount) || 0),
       expiresAt: cleanExpiresAt,
       isActive: Boolean(isActive),
+      type: type === 'private' ? 'private' : 'public',
+      usedBy: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -240,6 +273,7 @@ router.put('/:id', verifyAuth, verifyAdmin, async (req, res) => {
       expiresAt,
       isActive,
       description,
+      type,
       minOrderAmount
     } = req.body;
 
@@ -283,6 +317,7 @@ router.put('/:id', verifyAuth, verifyAdmin, async (req, res) => {
       minOrderAmount: minOrderAmount !== undefined ? Math.max(0, Number(minOrderAmount) || 0) : existing.minOrderAmount,
       expiresAt: cleanExpiresAt,
       isActive: isActive !== undefined ? Boolean(isActive) : existing.isActive,
+      type: type !== undefined ? (type === 'private' ? 'private' : 'public') : (existing.type || 'public'),
       updatedAt: new Date().toISOString()
     };
 

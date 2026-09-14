@@ -850,19 +850,18 @@ app.get('/api/auth/resolve-role', verifyAuth, async (req, res) => {
 
     // Fallback: if no profile found in any table, check if the user is an admin by email
     const adminEmails = process.env.ADMIN_EMAILS ? process.env.ADMIN_EMAILS.split(',').map(email => email.trim().toLowerCase()) : [];
-    if (adminEmails.length > 0 && adminEmails.includes(req.user.email.toLowerCase())) {
+    if (adminEmails.length > 0 && req.user?.email && adminEmails.includes(req.user.email.toLowerCase())) {
       // Try to create a profile in the admins table
       const { data: adminProfile, error: adminError } = await supabaseAdmin
         .from('admins')
         .insert({
           id: req.uid,
           email: req.user.email.toLowerCase(),
-          full_name: req.user.user_metadata?.full_name || '',
+          full_name: req.user.user_metadata?.full_name || req.user.user_metadata?.name || '',
         })
         .single();
 
       if (adminError) {
-        // If it's a unique violation (another request created it concurrently), try to fetch again
         if (adminError.code === '23505') {
           const { data: existingProfile, error: fetchError } = await supabaseAdmin
             .from('admins')
@@ -873,10 +872,74 @@ app.get('/api/auth/resolve-role', verifyAuth, async (req, res) => {
             return res.json(successResponse({ role: 'admin', profile: existingProfile }));
           }
         }
-        // If other error, we fall through to return 404
-      // if there's an error
       } else {
         return res.json(successResponse({ role: 'admin', profile: adminProfile }));
+      }
+    }
+
+    // Auto-provision customer profile for OAuth / Google signups
+    if (req.user?.email) {
+      const userEmail = req.user.email.toLowerCase().trim();
+      const fullName = (
+        req.user.user_metadata?.full_name ||
+        req.user.user_metadata?.name ||
+        (req.user.user_metadata?.first_name
+          ? `${req.user.user_metadata.first_name} ${req.user.user_metadata.last_name || ''}`.trim()
+          : '') ||
+        userEmail.split('@')[0] ||
+        'Customer'
+      );
+      const phone = req.user.user_metadata?.phone || '';
+
+      // Check if user exists by id or email
+      const { data: existingUser } = await supabaseAdmin
+        .from('users')
+        .select('*')
+        .or(`id.eq.${req.uid},email.eq.${userEmail}`)
+        .maybeSingle();
+
+      let finalProfile = existingUser;
+
+      if (!finalProfile) {
+        const { data: newProfile, error: createProfileErr } = await supabaseAdmin
+          .from('users')
+          .insert({
+            id: req.uid,
+            full_name: fullName,
+            email: userEmail,
+            phone: phone,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .select('*')
+          .maybeSingle();
+
+        if (!createProfileErr && newProfile) {
+          finalProfile = newProfile;
+        } else if (createProfileErr?.code === '23505') {
+          const { data: retryUser } = await supabaseAdmin
+            .from('users')
+            .select('*')
+            .or(`id.eq.${req.uid},email.eq.${userEmail}`)
+            .maybeSingle();
+          finalProfile = retryUser;
+        }
+      }
+
+      if (finalProfile) {
+        // Ensure wallet exists for this customer
+        await supabaseAdmin
+          .from('wallets')
+          .upsert({
+            id: finalProfile.id,
+            role: 'user',
+            balance: 0,
+            total_spent: 0,
+            total_earnings: 0,
+            total_withdrawn: 0
+          }, { onConflict: 'id' });
+
+        return res.json(successResponse({ role: 'user', profile: finalProfile }));
       }
     }
 

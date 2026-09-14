@@ -294,11 +294,11 @@ router.get('/:id', async (req, res) => {
 
     res.json({
       ...data,
-      bio: bio || 'Luxury streetwear creator & fashion artist at Designer Paradise.',
-      description: bio || 'Luxury streetwear creator & fashion artist at Designer Paradise.',
+      bio: bio,
+      description: bio,
       instagram,
       linkedin,
-      speciality: speciality || 'Streetwear & Haute Couture',
+      speciality: speciality,
       rank,
       ranking: rank
     });

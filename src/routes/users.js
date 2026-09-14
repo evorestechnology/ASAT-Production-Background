@@ -100,6 +100,70 @@ router.post('/register', async (req, res) => {
   }
 });
 
+// POST /api/users/sync-oauth - Sync or auto-provision OAuth customer profile and wallet
+router.post('/sync-oauth', verifyAuth, async (req, res) => {
+  try {
+    const userEmail = (req.user?.email || '').toLowerCase().trim();
+    if (!userEmail) {
+      return res.status(400).json({ error: 'User email is required from auth session' });
+    }
+
+    const { fullName: reqName, phone: reqPhone } = req.body || {};
+    const fullName = reqName ||
+                     req.user.user_metadata?.full_name ||
+                     req.user.user_metadata?.name ||
+                     userEmail.split('@')[0] ||
+                     'Customer';
+    const phone = reqPhone || req.user.user_metadata?.phone || '';
+
+    // Check if user already exists
+    const { data: existingUser } = await supabaseAdmin
+      .from('users')
+      .select('*')
+      .or(`id.eq.${req.uid},email.eq.${userEmail}`)
+      .maybeSingle();
+
+    let finalProfile = existingUser;
+
+    if (!finalProfile) {
+      const { data: createdUser, error: createErr } = await supabaseAdmin
+        .from('users')
+        .insert({
+          id: req.uid,
+          full_name: fullName,
+          email: userEmail,
+          phone: phone,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .select('*')
+        .maybeSingle();
+
+      if (createErr && createErr.code !== '23505') {
+        throw createErr;
+      }
+      finalProfile = createdUser;
+    }
+
+    // Initialize or verify customer wallet
+    await supabaseAdmin
+      .from('wallets')
+      .upsert({
+        id: finalProfile?.id || req.uid,
+        role: 'user',
+        balance: 0,
+        total_spent: 0,
+        total_earnings: 0,
+        total_withdrawn: 0
+      }, { onConflict: 'id' });
+
+    res.json({ success: true, profile: finalProfile });
+  } catch (err) {
+    console.error('Error syncing OAuth user profile:', err.message);
+    res.status(500).json({ error: err.message || 'Failed to sync OAuth user profile' });
+  }
+});
+
 // GET /api/users/me - Get own profile (requires auth)
 router.get('/me', verifyAuth, resolveAnyRole, async (req, res) => {
   try {

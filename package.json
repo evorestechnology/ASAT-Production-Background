@@ -8,6 +8,7 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "flush-all": "node scripts/flush_all.js",
+    "flush-except-admin": "node scripts/flush_except_admin.js",
     "add-admin": "node scripts/add_admin.js"
   },
   "dependencies": {
